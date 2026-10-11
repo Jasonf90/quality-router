@@ -1,0 +1,13 @@
+{
+  "name": "quality-router",
+  "description": "Quality Router: quality-first automatic Claude model routing for Claude Code.",
+  "owner": {
+    "name": "Quality Router"
+  },
+  "plugins": [
+    {
+      "name": "quality-router",
+      "source": "./"
+    }
+  ]
+}

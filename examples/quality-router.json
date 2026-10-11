@@ -1,0 +1,20 @@
+{
+  "comment": "Copy to <your project>/.claude/quality-router.json. Repository content is untrusted: this file can add checks, acceptance criteria and sensitive paths, and can RAISE the floor. It cannot turn routing on, choose models, lower a floor or change any other preference.",
+  "checks": [
+    { "kind": "test", "pattern": "\\bxcodebuild\\b.*-scheme MyApp\\b.*\\btest\\b" },
+    { "kind": "build", "pattern": "\\bxcodebuild\\b.*-scheme MyApp\\b.*\\bbuild\\b" },
+    { "kind": "lint", "pattern": "\\bswiftlint\\b" },
+    { "kind": "test", "pattern": "\\./gradlew\\b.*\\btestDebugUnitTest\\b" },
+    { "kind": "typecheck", "pattern": "\\bnpx tsc --noEmit\\b" }
+  ],
+  "required": ["build", "test"],
+  "acceptance": [
+    "Onboarding flow works offline",
+    "No new warnings in the Xcode build"
+  ],
+  "riskPaths": [
+    "(^|/)Sources/Billing/",
+    "(^|/)app/src/main/java/.*/security/"
+  ],
+  "floor": null
+}

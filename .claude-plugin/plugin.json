@@ -1,0 +1,19 @@
+{
+  "name": "quality-router",
+  "version": "0.8.1",
+  "description": "Routes each task phase to the least expensive capable Claude model, with conservative escalation, validation tracking, honest usage and savings reporting, and an on/off/dry-run band with a one-button mode switch.",
+  "author": {
+    "name": "Quality Router contributors",
+    "url": "https://github.com/Jasonf90/quality-router"
+  },
+  "license": "MIT",
+  "keywords": [
+    "routing",
+    "models",
+    "usage",
+    "cost",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "repository": "https://github.com/Jasonf90/quality-router"
+}
