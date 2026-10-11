@@ -184,9 +184,10 @@ export const AUTO_COMPACT_COOLDOWN_MS = 10 * 60_000
 /**
  * Smart auto-compaction: when to compact now that a main-loop turn has ended.
  *
- * - 'boundary': the prompt has reached the boundary size and the task in hand
- *   is finished: its task list is complete and no check is failing. The
- *   least that a summary can lose, and the next task starts small.
+ * - 'boundary': the prompt has reached the boundary size and the work in hand
+ *   is finished: committed during this turn, its checks passing against the
+ *   current code, or its task list complete; and no check failing. The least
+ *   that a summary can lose, and the next task starts small.
  * - 'ceiling': the prompt has passed the ceiling, finished or not, so a long
  *   task cannot grow without limit.
  *
@@ -203,16 +204,15 @@ export function smartCompactDue(i: {
   now: number
   boundaryTokens: number
   ceilingTokens: number
-  tasksTotal: number
-  tasksDone: number
+  /** The work in hand is finished: committed this turn, checks passing, or its task list complete. */
+  finished: boolean
   failingCheck: boolean
 }): 'boundary' | 'ceiling' | null {
   if (i.state !== 'on' || i.smart === 'off') return null
   if (i.turnReason !== 'answer' || i.agentsRunning > 0) return null
   if (i.lastAt !== null && i.now - i.lastAt < AUTO_COMPACT_COOLDOWN_MS) return null
   if (i.promptTokens >= i.ceilingTokens) return 'ceiling'
-  const finished = i.tasksTotal > 0 && i.tasksDone === i.tasksTotal && !i.failingCheck
-  if (i.promptTokens >= i.boundaryTokens && finished) return 'boundary'
+  if (i.promptTokens >= i.boundaryTokens && i.finished && !i.failingCheck) return 'boundary'
   return null
 }
 
@@ -225,8 +225,8 @@ export function watchReport(obs: readonly { at: number; tokens: number; smart: '
   const plain = obs.filter(o => o.plain)
   const plainMid = plain.filter(o => o.midTask)
   const lines = [
-    `Smart would have compacted ${boundary.length + ceiling.length} time(s): ${boundary.length} at a finished task${boundary.length ? ` (at ${boundary.map(o => k(o.tokens)).join(', ')})` : ''}, ${ceiling.length} past the ceiling${ceiling.length ? ` (at ${ceiling.map(o => k(o.tokens)).join(', ')})` : ''}.`,
-    `The plain threshold compacted ${plain.length} time(s)${plain.length ? `, ${plainMid.length} of them with a task still open (tasks in progress or a check failing)` : ''}.`,
+    `Smart would have compacted ${boundary.length + ceiling.length} time(s): ${boundary.length} when work is finished${boundary.length ? ` (at ${boundary.map(o => k(o.tokens)).join(', ')})` : ''}, ${ceiling.length} past the ceiling${ceiling.length ? ` (at ${ceiling.map(o => k(o.tokens)).join(', ')})` : ''}.`,
+    `The plain threshold compacted ${plain.length} time(s)${plain.length ? `, ${plainMid.length} of them with work unfinished (no commit, no passing checks or done task list, or a check failing)` : ''}.`,
   ]
   return lines
 }

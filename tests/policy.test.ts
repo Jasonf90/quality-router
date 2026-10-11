@@ -186,3 +186,22 @@ describe('follow-ups carry the task on (reviewer cases)', () => {
     expect(raisesTask(settings, analyzePrompt('ok thanks'), 'quality-first')).toBe(false)
   })
 })
+
+describe('asks the rules used to under-rate (from an audit of real prompts, paraphrased)', () => {
+  test('planning and research shape everything after them: strongest tier', () => {
+    for (const t of ['Make a detailed plan to simplify the app and make it more attractive', 'create a plan to audit this app and check every feature works', 'read the user feedback and make a plan to fix it', 'do some market research on popular timer apps, then make a plan'])
+      expect(`${t}: ${route(t).tier}`).toBe(`${t}: strong`)
+  })
+  test('submitting a release is consequential: high risk', () => {
+    for (const t of ['make the listing as appealing as possible then submit it for review', 'upload the build to TestFlight', 'check the App Store Connect submission draft'])
+      expect(`${t}: ${analyzePrompt(t).risk}`).toBe(`${t}: high`)
+  })
+  test('a bug that survived earlier fixes is a hard diagnosis', () => {
+    const a = analyzePrompt('Sharing with family still does not work, the invite never arrives on the second device')
+    expect(a.category).toBe('diagnosis')
+    expect(route('Sharing with family still does not work, the invite never arrives on the second device').tier).toBe('strong')
+  })
+  test('merging and rewriting documents is writing, not a look-up', () => {
+    expect(route('can we merge the remaining plan with the roadmap in decisions.md? recreate them').tier).not.toBe('cheap')
+  })
+})

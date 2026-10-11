@@ -31,6 +31,7 @@ const HIGH_RISK: Rule[] = [
   { re: /\b(security|vulnerab\w*|exploits?|xss|csrf|sql injection|injection attacks?|sanitiz\w*|cve-\d+|sandbox escape)\b/, signal: 'security' },
   { re: /\b(production (database|db|data|deploy\w*|release)|prod (db|database|deploy|data)|release signing|code signing|provisioning profiles?|deploy to prod\w*)\b/, signal: 'production' },
   { re: /\b(biometric\w*|face ?id|touch ?id|healthkit|health data|medical records?|background location|location tracking)\b/, signal: 'sensitive data' },
+  { re: /\b(submit\w* (it |this |the app |the build |the update |build \d+ |\d+ )?(for|to) (app store |apple |google play |play store )?review|app store connect|testflight|(release|publish|ship|upload)\w* (it |the app |the build |the update |a build |build \d+ )?(to|on) (the )?(app store|play store|testflight|production)|phased release)\b/, signal: 'store release' },
 ]
 
 /** An auth-flavoured task that only touches presentation is not high risk. */
@@ -41,6 +42,7 @@ const ARCHITECTURE: Rule[] = [
   { re: /\b(architect\w*|re-?architect\w*|redesign\w*|system design|data model(ing|s)?|schema design|state management|navigation (architecture|structure)|module boundaries|modulari[sz]\w*|monorepo|overhaul|re-?platform\w*|offline[- ]first|sync engine|caching strategy|scalab\w*|trade-?offs?|tech(nical)? design|design (doc|document|proposal))\b/, signal: 'architecture' },
   { re: /\b(which (approach|library|framework|pattern)|how should (we|i) (structure|design|architect|organi[sz]e|approach))\b/, signal: 'design decision' },
   { re: /\b(rewrite (the|our|this|my) (app|codebase|module|layer|backend|networking|data layer))\b/, signal: 'rewrite' },
+  { re: /\b(make|create|write|draft|build|prepare|come up with|put together|outline) (me |us )?(a |an |the )?(detailed |full |complete |thorough |step[- ]by[- ]step |comprehensive |master |new )?(plan|roadmap|strategy|proposal|spec|specification)\b|\bplan (to|for|how|out)\b|\b(market|competitor|competitive|user|ux) research\b|\b(product|marketing|growth|monetization|pricing|aso|launch) strategy\b|\baudit (this|the|my|our) (app|codebase|project)\b/, signal: 'planning' },
   { re: /\bmigrat\w* (from|to) (swiftui|uikit|jetpack compose|compose|react native|flutter|expo|kotlin|swift ?6?|typescript|redux|mobx|zustand|riverpod|bloc|combine|async\/await|coroutines)\b/, signal: 'framework migration' },
 ]
 
@@ -49,6 +51,7 @@ const DIAGNOSIS: Rule[] = [
   { re: /\b(randomly|sometimes) (crash|fail|freez|hang|break|log)\w*/, signal: 'intermittent failure' },
   { re: /\bonly (on|in) (a )?(real )?(device|release|production|ci|testflight|ios \d+|android \d+)\b/, signal: 'environment-specific failure' },
   { re: /\b(can'?t|cannot|couldn'?t) (figure out|reproduce|find out)|no idea why|have no idea\b/, signal: 'unclear cause' },
+  { re: /\bstill (doesn'?t|does not|isn'?t|is not|not|won'?t|can'?t|fails?|failing|broken|crash\w*|happen\w*|wrong|the same)\b|\bnot fixed\b|\b(same|this) (bug|issue|problem|error|crash) (again|is back|keeps)\b|\bkeeps (happening|crashing|failing|breaking)\b/, signal: 'recurring failure' },
 ]
 
 const BROAD = /\b(entire|whole) (app|codebase|project|repo)\b|\bacross (the |all |every )?(app|codebase|project|repo|modules|screens|files|platforms)\b|\bevery (screen|file|module|view|component|endpoint)\b|\bproject-?wide\b|\bthroughout (the )?(app|codebase|project)\b|\ball (the )?(screens|files|modules|views|components)\b/
@@ -72,7 +75,7 @@ const SUMMARIZE = /\b(summari[sz]\w*|summary|tl;?dr|recap)\b/
 const EXTRACTION = /\b(list (all|the|every)|find (all|every|where)|which files|where is|where are|grep|search for|count (the |how many)|extract (the |all )?(strings|values|keys|names|data)|show me)\b/
 const CLASSIFY = /\b(classify|categori[sz]e|label (these|the|each)|triage)\b/
 const QUESTION = /^(what|why|how|where|when|which|who|explain)\b|\?\s*$/
-const EDIT_VERBS = /\b(fix|change|add|implement|write|update|create|remove|delete|rename|refactor|migrate|replace|build|make|convert|move|bump|install|upgrade)\b/
+const EDIT_VERBS = /\b(fix|change|add|implement|write|update|create|remove|delete|rename|refactor|migrate|replace|build|make|convert|move|bump|install|upgrade|merge|recreate|rewrite|combine|consolidate|draft|compose|reorgani[sz]e|restructure)\b/
 const VAGUE = /^(please )?(make it (better|work|nicer)|improve( it| this| things)?|clean (it|this|things) up|fix (it|this|that|everything)|make this better|polish( it| this)?|optimi[sz]e( it| this)?|update it|do it|handle it|sort (it|this) out|tidy (it|this) up)\b/
 const HEDGES = /\b(something|somehow|not sure|maybe|i think|kind of|sort of|whatever|etc)\b/
 const TDD = /\b(tdd|test[- ]driven|red[- ]green|failing tests? first|write (a |the )?failing tests?|tests? (should|will|must) fail (first|initially))\b/
@@ -114,15 +117,16 @@ const REFERS_BACK = /^(ok(ay)?|yes|yep|yeah|sure|great|perfect|thanks|looks good
  * on"), a background task reporting back, or a short reply that points at the
  * current work ("ok implement it", "the test still fails, try a different
  * approach"). It keeps the task's risk, tier and escalations instead of being
- * judged as new work from its few words. A reply that names a file, or brings
- * its own high risk, architecture or hard diagnosis, is new work.
+ * judged as new work from its few words, and a reply that reports the bug is
+ * still there raises the task. A reply that names a file, or brings its own
+ * high risk or design work, is new work.
  */
 export function isFollowUp(text: string, a: Analysis): boolean {
   if (isContinuation(text)) return true
   const t = text.trim().toLowerCase()
   if (t.startsWith('<task-notification')) return true
   if (t.length > 200) return false
-  if (a.risk === 'high' || a.category === 'architecture' || a.category === 'diagnosis') return false
+  if (a.risk === 'high' || a.category === 'architecture') return false
   if ((t.match(FILE_REF) ?? []).length > 0) return false
   return REFERS_BACK.test(t)
 }

@@ -34,7 +34,7 @@ export const HELP = [
   '  band full|compact|off              size of the band above the prompt',
   '  autocompact <tokens>|off           compact automatically when a turn ends this large (e.g. 300k)',
   '  autocompact smart|watch|report     compact at finished tasks (smart), or watch when it would first',
-  '  autocompact boundary|ceiling <tokens>   smart sizes (default 150k at a finished task, 400k mid-task)',
+  '  autocompact boundary|ceiling <tokens>   smart sizes (default 150k when work is finished, 400k mid-task)',
   '  mode quality-first|balanced|economy',
   '  model auto|cheap|middle|strong|<model-id>   manual override (auto = router decides)',
   '  floor none|cheap|middle|strong      never route below this tier',

@@ -165,9 +165,10 @@ Honesty rules:
 *Plain:* `/quality-router autocompact 300k` compacts a moment after a turn ends at or above that size, wherever the task is.
 
 *Smart:* `/quality-router autocompact smart` picks the moment instead:
-- **At a finished task:** when the task list is complete and no check is failing, once the conversation is past **150k** tokens. Little is lost then, and the next task starts small.
+- **When the work is finished:** a commit succeeded during the reply, or the checks pass against the current code, or the task list is complete; and no check is failing. Then, once the conversation is past **150k** tokens, it compacts: little is lost, and the next task starts small.
 - **Mid-task only past 400k:** a long task is still trimmed, but a task in progress is otherwise left alone, because a summary written mid-task can drop the error messages and the fixes already tried.
-- With no task list, only the 400k ceiling applies.
+- On four recorded sessions, this compacted mid-work far less often than a plain 300k rule (1–5 times against 3–13) and saved 39–56% against 36–46%. Those figures assume every summary keeps what the next step needs; they measure cost and timing, not summary quality.
+- Compaction can only run when Claude stops and waits for you. One long, unbroken stretch of work (a single prompt that runs for half an hour) cannot be compacted until it ends; Claude Code's own compaction near the context limit still applies.
 - Sizes: `autocompact boundary <size>`, `autocompact ceiling <size>`.
 
 *Watching first:* `/quality-router autocompact watch` leaves the plain threshold in charge and changes nothing, but notes each moment smart *would* have compacted. A line appears in the band ("would compact now: the task is finished, 180k tokens"), and `/quality-router autocompact report` lists the moments, and how many plain compactions happened with a task still open. When the timing looks right, `autocompact smart` switches over.
@@ -247,6 +248,7 @@ These are checked by their own tests (`escalation.test.ts`, `policy.test.ts`):
 - **Risk found while working lasts.** Once a task touches a sensitive file (auth, payments, keychain…) or runs a destructive command, it stays on the strongest tier for the rest of the task, whatever is decided later. Two edits in one response are both seen.
 - **A task list never lowers the prompt's risk.** A vague prompt ("start phase 3") is judged from the task list Claude writes; a risky prompt keeps its risk however routine the tasks sound, and any task can be raised by its list.
 - **Checks it cannot see the end of don't count.** A test run sent to the background is not recorded as a pass. Repairs that only rewrite tests, or are written with `sed`, count as repair attempts.
+- **Planning, research and releases are not routine.** "Make a detailed plan…", "create a plan to audit this app", "do market research…" run on the strongest tier; submitting a build for review, TestFlight and App Store Connect work count as high risk; "it still doesn't work" is treated as a hard diagnosis; merging or rewriting documents is writing, never a cheap-tier look-up. (From an audit of real prompts that had gone to the middle or cheap tier.)
 - **Routine work doesn't escalate.** Deleting build output (`rm -rf build/ DerivedData …`), resetting simulator defaults, or editing a note whose name mentions purchases does not move the task to the strongest tier: those switches cost a full re-cache and add nothing to the quality of the code.
 
 **What the modes trade:**

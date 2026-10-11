@@ -117,6 +117,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 - **Live API acceptance of routed models is unverified here.** The headless smoke test couldn't refresh OAuth from the sandbox. Verify with the dry-run → ON steps in [EVALUATION.md](EVALUATION.md) and check the pane's *observed* model.
 - **Phase detection is heuristic.** A short reply that points at the work in hand ("ok implement it", "still failing") continues the task; a reply that names a file or brings its own high risk starts a new one. A genuinely new short task phrased like a follow-up stays on the current task's tier (a cost, never a quality loss).
 - **The cache-aware savings estimate is a model.** It holds output tokens equal across paths and approximates the conversation's growth at a model switch (another model can encode the same history in fewer tokens). On the audited sessions two independent versions of it differed by $7–13 on a $220 session; both agreed on the direction.
+- **Auto-compaction needs a turn end.** A mod cannot compact while a turn runs, so a single long agentic turn grows until it ends (or until Claude Code's own compaction). The usage record is saved every 25 requests or 10 minutes, so long turns no longer leave it only in memory.
 - **A manual `/model` pause does not survive `/clear`** (the engine resets the mod's state). The project file and stored history are re-read after `/clear`.
 - **Escalation is enforced, but signals are heuristic.** "Credible evidence" means observed checks failing after edits; the router can't see test intent beyond what the commands and file paths say. Insufficient confidence mid-task isn't detected from the model's text.
 - **Code edits on the cheap tier are seen through edit tools and plain shell writes only.** A file written from inside a script (python, node) isn't seen, so a cheap-tier task that writes code that way isn't moved up.
@@ -136,7 +137,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 
 ## Test coverage
 
-`claude plugin test` runs 213 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
+`claude plugin test` runs 219 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
 
 | Area | Unit (pure) | Mock integration (native kit) | Live |
 |---|---|---|---|

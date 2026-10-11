@@ -251,6 +251,8 @@ export type Runtime = {
   lastMainRequestAt?: number | null
   /** The session's project file and stored history have been read into this state (false again after /clear resets it). */
   loaded?: boolean
+  /** A git commit succeeded in the main loop during the current turn: a finished unit of work. */
+  turnCommitted?: boolean
 }
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -474,7 +476,7 @@ export type CompactObservation = {
   smart: 'boundary' | 'ceiling' | null
   /** The plain threshold compacted here. */
   plain: boolean
-  /** A task was still open here: tasks in progress, or a check failing. */
+  /** The work was unfinished here: no commit, no passing checks and no completed task list, or a check failing. */
   midTask: boolean
 }
 

@@ -186,10 +186,10 @@ export function statusText(s: Snapshot): string {
   const onlyOn = s.prefs.state === 'on' ? '' : ' (runs only while routing is ON)'
   const k = (n: number) => `${Math.round(n / 1000)}k`
   if (s.prefs.autoCompactSmart === 'on') {
-    lines.push(`  auto-compact: smart, at a finished task from ${k(s.prefs.autoCompactBoundary)} tokens, mid-task past ${k(s.prefs.autoCompactCeiling)}${onlyOn}`)
+    lines.push(`  auto-compact: smart, when work is finished from ${k(s.prefs.autoCompactBoundary)} tokens, mid-task past ${k(s.prefs.autoCompactCeiling)}${onlyOn}`)
   } else {
     if (s.prefs.autoCompactTokens !== null) lines.push(`  auto-compact at ${k(s.prefs.autoCompactTokens)} tokens${onlyOn}`)
-    if (s.prefs.autoCompactSmart === 'watch') lines.push(`  smart auto-compact watching (would compact at a finished task from ${k(s.prefs.autoCompactBoundary)}, mid-task past ${k(s.prefs.autoCompactCeiling)}): /quality-router autocompact report`)
+    if (s.prefs.autoCompactSmart === 'watch') lines.push(`  smart auto-compact watching (would compact when work is finished from ${k(s.prefs.autoCompactBoundary)}, mid-task past ${k(s.prefs.autoCompactCeiling)}): /quality-router autocompact report`)
   }
   const floor = s.prefs.floor ? `floor ${s.prefs.floor}` : 'no floor'
   const o = s.prefs.override

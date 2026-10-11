@@ -107,6 +107,7 @@ import {
   recordEdit,
   riskyPath,
   scopeFloor,
+  verdict,
 } from './escalation'
 import { agentEstimate, recordRun } from './eta'
 import { addReading } from './limits'
@@ -466,6 +467,7 @@ async function onTurnStart($: Engine, e: { text: string; turnId: string }): Prom
   await refreshPrefs($)
   await ensureLedger($)
   await ensureLoaded($)
+  await patchRuntime($, r => (r.turnCommitted ? { ...r, turnCommitted: false } : r))
   const current = sessionSavings(await view($, true))
   await patchActivity($, a => ({ ...a, savingsMark: current ? { kind: current.kind, usd: current.usd } : null }))
   const rt = await read($, runtimeAtom)
@@ -708,6 +710,9 @@ async function passiveProposal($: Engine, e: TurnStepInput, prefs: Prefs, rt: Ru
   return { ...plan, proposedModel: sameTier ? e.model : d.model }
 }
 
+/** Requests recorded since the usage record was last saved to the store, and when that was. */
+const sincePersist = { requests: 0, at: 0 }
+
 /** Records a finished request and what it says about the session. */
 async function finishStep(
   $: Engine,
@@ -745,6 +750,15 @@ async function finishStep(
     status: status ?? (usage ? 'ok' : aborted ? 'aborted' : 'no-response'),
   })
   if (!added) return
+  // Long stretches of work without a reply to the person (a 30-minute agentic
+  // turn) would otherwise keep the usage record only in memory until the turn
+  // ends: save it every 25 requests or 10 minutes as well.
+  sincePersist.requests++
+  if (sincePersist.requests >= 25 || t1 - sincePersist.at >= 10 * 60_000) {
+    sincePersist.requests = 0
+    sincePersist.at = t1
+    await persistLedger($, await read($, ledgerAtom))
+  }
   const agentId = e.agentId
   await patchActivity($, a => {
     const stepped = agentId ? agentStep(a, agentId, usage, res.usage?.model ?? null) : a
@@ -982,6 +996,9 @@ async function onToolResult($: Engine, e: ToolCallInput, ran: ToolCallResult): P
     }
     const destructive = ok && isDestructive(command)
     const wroteCode = ok ? bashWritesCode(command) : null
+    if (ok && scopeId === MAIN && /\bgit\b[^;&|\n]*\bcommit\b/.test(command)) {
+      await patchRuntime($, r => ({ ...r, turnCommitted: true }))
+    }
     if (wroteCode) {
       // A source file written from the shell is an edit like any other: it moves the code version.
       await patchRuntime($, r => {
@@ -1231,6 +1248,11 @@ async function refreshStatusLine($: Engine): Promise<void> {
  */
 const WATCH_LOG = 'autocompact-watch'
 
+/** Why the work counts as finished, in a few words. */
+function finishedWhy(committed: boolean, verified: boolean, tasksDone: boolean): string {
+  return committed ? 'the work was committed' : verified ? 'the checks pass' : tasksDone ? 'the task list is done' : 'the task is finished'
+}
+
 async function loadWatchLog($: Engine): Promise<CompactObservation[]> {
   const raw = await $.store.get(WATCH_LOG)
   return Array.isArray(raw) ? (raw as CompactObservation[]).slice(-100) : []
@@ -1238,7 +1260,7 @@ async function loadWatchLog($: Engine): Promise<CompactObservation[]> {
 
 /**
  * At the end of a main-loop turn: compact, or (watching) note when smart
- * auto-compact would have. Smart 'on' compacts at a finished task past the
+ * auto-compact would have. Smart 'on' compacts when work is finished past the
  * boundary size, or past the ceiling; otherwise the plain threshold decides.
  */
 async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: number | null): Promise<void> {
@@ -1250,8 +1272,11 @@ async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: nu
   const tokens = contextTokens ?? rt.lastPromptTokens
   const agentsRunning = Object.values(activity.agents).filter(g => g.status === 'running').length
   const tasks = progress(taskList(activity, MAIN_SCOPE))
-  const failingCheck = Object.values(validation.checks).some(c => c.status === 'failed')
-  const midTask = failingCheck || (tasks !== null && tasks.done < tasks.total)
+  const checks = verdict(validation, codeVersions(rt))
+  const failingCheck = checks === 'failed'
+  const tasksDone = tasks !== null && tasks.total > 0 && tasks.done === tasks.total
+  const finished = rt.turnCommitted === true || checks === 'verified' || tasksDone
+  const midTask = failingCheck || !finished
   const smart = smartCompactDue({
     state: prefs.state,
     smart: prefs.autoCompactSmart,
@@ -1262,8 +1287,7 @@ async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: nu
     now,
     boundaryTokens: prefs.autoCompactBoundary,
     ceilingTokens: prefs.autoCompactCeiling,
-    tasksTotal: tasks?.total ?? 0,
-    tasksDone: tasks?.done ?? 0,
+    finished,
     failingCheck,
   })
   const plain =
@@ -1277,7 +1301,7 @@ async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: nu
     if (smart) {
       await patchActivity($, a => ({ ...a, lastWatchAt: now }))
       if (!plain) {
-        const why = smart === 'boundary' ? 'the task is finished' : `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling`
+        const why = smart === 'boundary' ? finishedWhy(rt.turnCommitted === true, checks === 'verified', tasksDone) : `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling`
         await notify($, `Quality Router: smart auto-compact (watching) would compact now: ${why}, ${size}k tokens. Nothing was changed. (/quality-router autocompact report)`, 'info')
       }
     }
@@ -1287,7 +1311,7 @@ async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: nu
   if (!act) return
   await patchActivity($, a => ({ ...a, lastAutoCompactAt: now }))
   const why =
-    act === 'boundary' ? 'the task is finished' : act === 'ceiling' ? `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling` : midTask ? 'past the threshold, with a task still open' : 'past the threshold'
+    act === 'boundary' ? finishedWhy(rt.turnCommitted === true, checks === 'verified', tasksDone) : act === 'ceiling' ? `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling` : midTask ? 'past the threshold, with a task still open' : 'past the threshold'
   await scheduleCompaction($, 'auto', 1500, async r => {
     await notify($, r.ok ? `Quality Router: auto-compacted a ${size}k-token conversation (${why}), keeping the plan and current task. ${r.text} (/quality-router autocompact off to stop)` : `Quality Router: auto-compact skipped: ${r.text}`, r.ok ? 'success' : 'warning')
   })
@@ -1502,7 +1526,7 @@ async function runCommand($: Engine, args: string): Promise<string> {
     case 'autocompact-report': {
       const p = await getPrefs($)
       const mode = p.autoCompactSmart === 'on' ? 'on' : p.autoCompactSmart === 'watch' ? 'watching' : 'off'
-      const head = `Smart auto-compact: ${mode} · at a finished task from ${Math.round(p.autoCompactBoundary / 1000)}k tokens · mid-task past ${Math.round(p.autoCompactCeiling / 1000)}k${p.autoCompactTokens !== null && p.autoCompactSmart !== 'on' ? ` · plain threshold ${Math.round(p.autoCompactTokens / 1000)}k in charge` : ''}`
+      const head = `Smart auto-compact: ${mode} · when work is finished from ${Math.round(p.autoCompactBoundary / 1000)}k tokens · mid-task past ${Math.round(p.autoCompactCeiling / 1000)}k${p.autoCompactTokens !== null && p.autoCompactSmart !== 'on' ? ` · plain threshold ${Math.round(p.autoCompactTokens / 1000)}k in charge` : ''}`
       return [head, ...watchReport(await loadWatchLog($)).map(l => `  ${l}`), p.autoCompactSmart === 'watch' ? '  /quality-router autocompact smart switches to it.' : ''].filter(Boolean).join('\n')
     }
     case 'savings':
