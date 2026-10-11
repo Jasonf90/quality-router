@@ -17,6 +17,7 @@ export type Action =
   | { kind: 'review-now' }
   | { kind: 'tips' }
   | { kind: 'compact' }
+  | { kind: 'autocompact-report' }
   | { kind: 'savings' }
   | { kind: 'resume-auto' }
   | { kind: 'experiment-start'; label: string; arm: 'routed' | 'baseline'; spec: string; startState: string; validation: string; environment: string }
@@ -32,6 +33,8 @@ export const HELP = [
   '  savings | tips | compact           savings summary, recommendations, compact the conversation now',
   '  band full|compact|off              size of the band above the prompt',
   '  autocompact <tokens>|off           compact automatically when a turn ends this large (e.g. 300k)',
+  '  autocompact smart|watch|report     compact at finished tasks (smart), or watch when it would first',
+  '  autocompact boundary|ceiling <tokens>   smart sizes (default 150k at a finished task, 400k mid-task)',
   '  mode quality-first|balanced|economy',
   '  model auto|cheap|middle|strong|<model-id>   manual override (auto = router decides)',
   '  floor none|cheap|middle|strong      never route below this tier',
@@ -108,11 +111,39 @@ export function parseCommand(args: string): Action {
       return { kind: 'tips' }
     case 'autocompact':
     case 'auto-compact': {
-      if (a1 === 'off') return prefs(p => ({ ...p, autoCompactTokens: null }), 'auto-compact off: compaction is only suggested')
-      const m = /^(\d+(?:\.\d+)?)(k|m)?$/i.exec(a1 ?? '')
-      const n = m ? Math.round(Number(m[1]) * (m[2]?.toLowerCase() === 'm' ? 1_000_000 : m[2] ? 1000 : 1)) : NaN
-      if (!Number.isFinite(n) || n < 50_000 || n > 2_000_000) return { kind: 'error', message: 'autocompact takes a size from 50k to 2m tokens (e.g. 300k), or off' }
-      return prefs(p => ({ ...p, autoCompactTokens: n }), `auto-compact at ${Math.round(n / 1000)}k tokens: when a turn ends at or above that, the conversation is compacted, keeping the plan and current task`)
+      const size = (v: string | undefined): number => {
+        const m = /^(\d+(?:\.\d+)?)(k|m)?$/i.exec(v ?? '')
+        const n = m ? Math.round(Number(m[1]) * (m[2]?.toLowerCase() === 'm' ? 1_000_000 : m[2] ? 1000 : 1)) : NaN
+        return Number.isFinite(n) && n >= 50_000 && n <= 2_000_000 ? n : NaN
+      }
+      const k = (n: number) => `${Math.round(n / 1000)}k`
+      if (a1 === 'off') return prefs(p => ({ ...p, autoCompactTokens: null, autoCompactSmart: 'off' }), 'auto-compact off: compaction is only suggested')
+      if (a1 === 'report') return { kind: 'autocompact-report' }
+      if (a1 === 'smart') {
+        return prefs(
+          p => ({ ...p, autoCompactSmart: 'on' }),
+          'smart auto-compact on: compacts when a task is finished (task list complete, no check failing) once the conversation is past the boundary size, and mid-task only past the ceiling',
+        )
+      }
+      if (a1 === 'watch') {
+        return prefs(
+          p => ({ ...p, autoCompactSmart: 'watch' }),
+          'smart auto-compact watching: the plain threshold still compacts; the band and /quality-router autocompact report show when smart would have compacted instead',
+        )
+      }
+      if (a1 === 'boundary' || a1 === 'ceiling') {
+        const n = size(a2)
+        if (!Number.isFinite(n)) return { kind: 'error', message: `autocompact ${a1} takes a size from 50k to 2m tokens` }
+        return a1 === 'boundary'
+          ? prefs(p => ({ ...p, autoCompactBoundary: n, autoCompactCeiling: Math.max(p.autoCompactCeiling, n) }), `smart auto-compact compacts a finished task from ${k(n)} tokens`)
+          : prefs(p => ({ ...p, autoCompactCeiling: Math.max(n, p.autoCompactBoundary) }), `smart auto-compact compacts mid-task only past ${k(n)} tokens`)
+      }
+      const n = size(a1)
+      if (!Number.isFinite(n)) return { kind: 'error', message: 'autocompact takes a size from 50k to 2m tokens (e.g. 300k), smart, watch, report, boundary <size>, ceiling <size>, or off' }
+      return prefs(
+        p => ({ ...p, autoCompactTokens: n, autoCompactSmart: p.autoCompactSmart === 'on' ? 'off' : p.autoCompactSmart }),
+        `auto-compact at ${k(n)} tokens: when a turn ends at or above that, the conversation is compacted, keeping the plan and current task`,
+      )
     }
     case 'compact':
       return { kind: 'compact' }

@@ -55,6 +55,17 @@ export type Prefs = {
    * many tokens (routing ON only); null = off, the band only suggests it.
    */
   autoCompactTokens: number | null
+  /**
+   * Smart auto-compaction. 'on': compact at a task boundary (the task list is
+   * complete and no check is failing) once the prompt reaches
+   * `autoCompactBoundary` tokens, and mid-task only past `autoCompactCeiling`;
+   * the plain threshold above is then not used. 'watch': the plain threshold
+   * stays in charge, and the band and `autocompact report` show when smart
+   * would have compacted. 'off': neither.
+   */
+  autoCompactSmart: 'off' | 'watch' | 'on'
+  autoCompactBoundary: number
+  autoCompactCeiling: number
   classifier: {
     enabled: boolean
     /** Paid classifier calls while in DRY RUN: off unless explicitly enabled. */
@@ -451,6 +462,20 @@ export type Activity = {
   notice?: { text: string; tone: 'success' | 'warning' | 'error' | 'info'; at: number } | null
   /** When Start fresh was pressed where the prompt box cannot be typed into: the band asks to confirm /clear. */
   pendingClear?: number | null
+  /** When smart auto-compact, watching, last noted a moment it would have compacted (one note per 10 minutes). */
+  lastWatchAt?: number | null
+}
+
+/** One turn end at which smart auto-compact would have compacted, or the plain threshold did (watch mode). */
+export type CompactObservation = {
+  at: number
+  tokens: number
+  /** What smart auto-compact would have done here. */
+  smart: 'boundary' | 'ceiling' | null
+  /** The plain threshold compacted here. */
+  plain: boolean
+  /** A task was still open here: tasks in progress, or a check failing. */
+  midTask: boolean
 }
 
 export type Recommendation = {

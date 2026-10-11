@@ -160,12 +160,27 @@ Honesty rules:
 | Weekly limit projected before reset | Economy mode and fresher sessions | **Economy mode** |
 | DRY RUN would have saved ≥ $0.10 | Turning routing on | **Turn on** |
 
-**Auto-compact (opt-in):** `/quality-router autocompact 300k` compacts the conversation a moment after a turn ends at or above that size. It keeps the plan, what's done and what's next.
-- It only runs while routing is ON.
-- It never runs after an interrupted or failed turn, or while a subagent is still running.
-- It waits at least 10 minutes between automatic compactions.
-- If you start typing first, Claude Code refuses it and it tries again at the next turn end.
-- A notification says when it happened.
+**Auto-compact (opt-in)** comes in two kinds.
+
+*Plain:* `/quality-router autocompact 300k` compacts a moment after a turn ends at or above that size, wherever the task is.
+
+*Smart:* `/quality-router autocompact smart` picks the moment instead:
+- **At a finished task:** when the task list is complete and no check is failing, once the conversation is past **150k** tokens. Little is lost then, and the next task starts small.
+- **Mid-task only past 400k:** a long task is still trimmed, but a task in progress is otherwise left alone, because a summary written mid-task can drop the error messages and the fixes already tried.
+- With no task list, only the 400k ceiling applies.
+- Sizes: `autocompact boundary <size>`, `autocompact ceiling <size>`.
+
+*Watching first:* `/quality-router autocompact watch` leaves the plain threshold in charge and changes nothing, but notes each moment smart *would* have compacted. A line appears in the band ("would compact now: the task is finished, 180k tokens"), and `/quality-router autocompact report` lists the moments, and how many plain compactions happened with a task still open. When the timing looks right, `autocompact smart` switches over.
+
+Both kinds:
+- run only while routing is ON;
+- never run after an interrupted or failed turn, or while a subagent is still running;
+- wait at least 10 minutes between automatic compactions;
+- skip a turn end if you start typing first (Claude Code refuses it then), and try again at the next one;
+- tell the summary to keep the plan, what's done and what's next, your stated preferences and constraints (in your words where possible), the approaches already tried and rejected, and unresolved error messages verbatim;
+- say when they happened, in a notification and in the band.
+
+Recorded sessions show what compaction saves (29–52% at 300k), but not whether a summary dropped something that mattered: that is what watching is for.
 
 **How compaction runs.** A compaction takes a minute or two on a large conversation. **Compact now**, `/quality-router compact` and auto-compact all say at once that they started, show *Compacting…* in the band, and send a notification when it finishes or fails, with Claude Code's reason. In the terminal the router compacts directly. In the desktop app (an SDK session) Claude Code allows compaction only through the `/compact` command, so the router runs `/compact` for you with the same focus instructions; it appears in the transcript like a typed `/compact`.
 
@@ -184,6 +199,8 @@ The band's buttons and the commands both go through the same setter, and prefere
 | `savings` · `tips` · `compact` | Savings summary, recommendations, compact now (focused on the current task) |
 | `band full\|compact\|off` | Size of the band above the prompt |
 | `autocompact <tokens>\|off` | Compact automatically when a turn ends this large, e.g. `300k`. Off by default. |
+| `autocompact smart\|watch\|report` | Compact at finished tasks (from 150k) and mid-task only past 400k; or watch when it would, first; or list what watching saw |
+| `autocompact boundary\|ceiling <tokens>` | Smart auto-compact's sizes |
 | `mode quality-first\|balanced\|economy` | How willing the router is to go cheap (safety floors apply in every mode). The band and pane mode button cycles the same three. |
 | `model auto\|cheap\|middle\|strong\|<model-id>` | Manual override. `auto` hands selection back to the router. |
 | `floor none\|cheap\|middle\|strong` | Never route below this tier |

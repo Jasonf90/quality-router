@@ -64,6 +64,9 @@ export const DEFAULT_PREFS: Prefs = {
   effort: {},
   autoEffort: true,
   autoCompactTokens: null,
+  autoCompactSmart: 'off',
+  autoCompactBoundary: 150_000,
+  autoCompactCeiling: 400_000,
   classifier: { enabled: true, inDryRun: false, timeoutMs: 6000 },
   subagents: true,
   respectManual: true,
@@ -215,6 +218,9 @@ export function normalizePrefs(raw: unknown): Prefs {
       typeof r.autoCompactTokens === 'number' && Number.isFinite(r.autoCompactTokens) && r.autoCompactTokens >= 50_000 && r.autoCompactTokens <= 2_000_000
         ? Math.round(r.autoCompactTokens)
         : null,
+    autoCompactSmart: r.autoCompactSmart === 'on' || r.autoCompactSmart === 'watch' ? r.autoCompactSmart : 'off',
+    autoCompactBoundary: compactSize(r.autoCompactBoundary, 150_000),
+    autoCompactCeiling: Math.max(compactSize(r.autoCompactCeiling, 400_000), compactSize(r.autoCompactBoundary, 150_000)),
     classifier: {
       enabled: bool(classifier.enabled, true),
       inDryRun: bool(classifier.inDryRun, false),
@@ -309,4 +315,9 @@ export function parseProjectConfig(raw: unknown, path: string): ProjectConfig {
 /** The cache-write lifetime to price at: the person's setting, or 1h for 'auto' when nothing better is known. */
 export function cacheTtlOf(prefs: Pick<Prefs, 'cacheTtl'>): '5m' | '1h' {
   return prefs.cacheTtl === '5m' ? '5m' : '1h'
+}
+
+/** A compaction size from 50k to 2m tokens, else the default. */
+function compactSize(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 50_000 && v <= 2_000_000 ? Math.round(v) : fallback
 }

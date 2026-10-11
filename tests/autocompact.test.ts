@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
-import { AUTO_COMPACT_COOLDOWN_MS, autoCompactDue } from '../hooks/advisor'
+import { AUTO_COMPACT_COOLDOWN_MS, autoCompactDue, smartCompactDue, watchReport } from '../hooks/advisor'
 import { parseCommand } from '../hooks/commands'
 import { compactCommandFailed, needsCompactCommand } from '../hooks/core'
 import { normalizePrefs } from '../hooks/settings'
-import { SLOW, SPAWN, cmd, install, start, step } from './harness'
+import { BAND_PROPS, SLOW, SPAWN, cmd, install, start, step, tool } from './harness'
 
 const due = { state: 'on' as const, threshold: 300_000, promptTokens: 400_000, turnReason: 'answer', agentsRunning: 0, lastAutoCompactAt: null, now: 1_000_000 }
 
@@ -138,5 +139,127 @@ describe('compacting in the desktop app (pure, from the real engine messages)', 
     expect(compactCommandFailed('Error during compaction: the request failed')).toBe(true)
     expect(compactCommandFailed('Compacted. ctrl+o to see full summary')).toBe(false)
     expect(compactCommandFailed('')).toBe(false)
+  })
+})
+
+describe('smart auto-compact (pure)', () => {
+  const at = { state: 'on' as const, smart: 'on' as const, promptTokens: 160_000, turnReason: 'answer', agentsRunning: 0, lastAt: null, now: 1_000_000, boundaryTokens: 150_000, ceilingTokens: 400_000, tasksTotal: 4, tasksDone: 4, failingCheck: false }
+
+  test('compacts a finished task past the boundary size, and anything past the ceiling', () => {
+    expect(smartCompactDue(at)).toBe('boundary')
+    expect(smartCompactDue({ ...at, promptTokens: 149_000 })).toBe(null)
+    expect(smartCompactDue({ ...at, promptTokens: 420_000, tasksDone: 1 })).toBe('ceiling')
+    expect(smartCompactDue({ ...at, promptTokens: 420_000, failingCheck: true })).toBe('ceiling')
+  })
+
+  test('never mid-task below the ceiling: tasks still open, a check failing, or no task list at all', () => {
+    expect(smartCompactDue({ ...at, promptTokens: 380_000, tasksDone: 3 })).toBe(null)
+    expect(smartCompactDue({ ...at, promptTokens: 380_000, failingCheck: true })).toBe(null)
+    expect(smartCompactDue({ ...at, promptTokens: 380_000, tasksTotal: 0, tasksDone: 0 })).toBe(null)
+  })
+
+  test('never when off, routing not ON, after an interrupted turn, with agents running, or within ten minutes', () => {
+    expect(smartCompactDue({ ...at, smart: 'off' })).toBe(null)
+    expect(smartCompactDue({ ...at, state: 'dry-run' })).toBe(null)
+    expect(smartCompactDue({ ...at, turnReason: 'aborted' })).toBe(null)
+    expect(smartCompactDue({ ...at, agentsRunning: 1 })).toBe(null)
+    expect(smartCompactDue({ ...at, lastAt: at.now - 60_000 })).toBe(null)
+    expect(smartCompactDue({ ...at, smart: 'watch' })).toBe('boundary')
+  })
+
+  test('the commands: smart, watch, report, sizes; a plain size leaves watching on and turns smart off', () => {
+    const base = normalizePrefs({ autoCompactTokens: 300_000 })
+    const run = (cmd: string, p = base) => {
+      const a = parseCommand(cmd)
+      if (a.kind !== 'prefs') throw new Error(`${cmd}: ${a.kind}`)
+      return normalizePrefs(a.change(p))
+    }
+    expect(base.autoCompactSmart).toBe('off')
+    expect(run('autocompact smart').autoCompactSmart).toBe('on')
+    expect(run('autocompact watch').autoCompactSmart).toBe('watch')
+    expect(parseCommand('autocompact report').kind).toBe('autocompact-report')
+    expect(run('autocompact boundary 200k').autoCompactBoundary).toBe(200_000)
+    expect(run('autocompact ceiling 450k').autoCompactCeiling).toBe(450_000)
+    expect(run('autocompact 250k', run('autocompact watch')).autoCompactSmart).toBe('watch')
+    expect(run('autocompact 250k', run('autocompact smart')).autoCompactSmart).toBe('off')
+    expect(run('autocompact off', run('autocompact smart'))).toMatchObject({ autoCompactSmart: 'off', autoCompactTokens: null })
+    expect(parseCommand('autocompact boundary lots').kind).toBe('error')
+  })
+
+  test('the watch report counts what smart would have done and what the plain threshold did', () => {
+    const lines = watchReport([
+      { at: 1, tokens: 180_000, smart: 'boundary', plain: false, midTask: false },
+      { at: 2, tokens: 310_000, smart: null, plain: true, midTask: true },
+    ])
+    expect(lines.join(' ')).toContain('would have compacted 1 time(s): 1 at a finished task (at 180k)')
+    expect(lines.join(' ')).toContain('compacted 1 time(s), 1 of them with a task still open')
+  })
+})
+
+describe('smart auto-compact in the session (mock integration)', () => {
+  const big = { input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 0 }
+  const todos = (done: number, total: number) => ({ todos: Array.from({ length: total }, (_, i) => ({ content: `Step ${i + 1}`, status: i < done ? 'completed' : 'in_progress', activeForm: `Doing step ${i + 1}` })) })
+
+  async function work($: Engine, w: ReturnType<typeof install>, id: string, done: number, total: number) {
+    await $.turn.start({ text: id === 't1' ? 'Add a settings screen with a dark mode toggle' : 'ok continue', turnId: id })
+    await step($, { turnId: id })
+    await tool($, w, 'TodoWrite', todos(done, total))
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: id, reason: 'answer' } as never)
+    await w.clock.advance(2000)
+  }
+
+  test('on: waits while the task is open, compacts once it is finished, with instructions that keep what summaries lose', SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = big
+    await start($)
+    await cmd($, 'on')
+    expect(await cmd($, 'autocompact smart')).toContain('smart auto-compact on')
+    w.context = { tokens: 300_000, window: 1_000_000, percent: 30 }
+    await work($, w, 't1', 2, 3)
+    expect(w.compactions.length).toBe(0)
+    w.context = { tokens: 310_000, window: 1_000_000, percent: 31 }
+    await work($, w, 't2', 3, 3)
+    expect(w.compactions.length).toBe(1)
+    expect(w.compactions[0]).toContain('approaches already tried and rejected')
+    expect(w.compactions[0]).toContain('preferences and constraints')
+    expect(w.toasts.some(t => t.includes('the task is finished'))).toBe(true)
+  })
+
+  test('on: past the ceiling it compacts even mid-task', SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = big
+    await start($)
+    await cmd($, 'on')
+    await cmd($, 'autocompact smart')
+    w.context = { tokens: 420_000, window: 1_000_000, percent: 42 }
+    await work($, w, 't1', 1, 3)
+    expect(w.compactions.length).toBe(1)
+    expect(w.toasts.some(t => t.includes('past the 400k ceiling'))).toBe(true)
+  })
+
+  test('watch: the plain threshold still compacts; smart only notes when it would have, in the band and the report', SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = big
+    await start($)
+    await cmd($, 'on')
+    await cmd($, 'autocompact 300k')
+    expect(await cmd($, 'autocompact watch')).toContain('watching')
+    // A finished task at 180k: smart would compact, the plain 300k threshold does not.
+    w.context = { tokens: 180_000, window: 1_000_000, percent: 18 }
+    await work($, w, 't1', 3, 3)
+    expect(w.compactions.length).toBe(0)
+    const ui = await $.ui.mount({ plugin: 'quality-router', component: 'AbovePrompt', props: BAND_PROPS, surface: 'desktop' })
+    expect(await ui.find({ type: 'Text', text: /would compact now: the task is finished, 180k tokens/ })).not.toBe(undefined)
+    await ui.unmount()
+    // Past 300k with a task open: the plain threshold compacts, and the report says it was mid-task.
+    await w.clock.advance(11 * 60_000)
+    w.context = { tokens: 320_000, window: 1_000_000, percent: 32 }
+    await work($, w, 't2', 1, 3)
+    expect(w.compactions.length).toBe(1)
+    const report = await cmd($, 'autocompact report')
+    expect(report).toContain('Smart auto-compact: watching')
+    expect(report).toContain('1 at a finished task (at 180k)')
+    expect(report).toContain('1 of them with a task still open')
+    expect(await cmd($, 'status')).toContain('smart auto-compact watching')
   })
 })

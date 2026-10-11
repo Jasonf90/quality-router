@@ -136,7 +136,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 
 ## Test coverage
 
-`claude plugin test` runs 203 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
+`claude plugin test` runs 213 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
 
 | Area | Unit (pure) | Mock integration (native kit) | Live |
 |---|---|---|---|

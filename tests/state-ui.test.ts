@@ -231,3 +231,23 @@ describe('state, controls and indicators (mock integration)', () => {
     expect(w.sent[0]?.model).toBe('claude-sonnet-5-5')
   })
 })
+
+describe('settings shared by several sessions (mock integration)', () => {
+  test('a change here never undoes a change another session made since this one read the settings', SLOW, async ($, on) => {
+    const w = install(on, { store: { prefs: { version: 2, state: 'on', autoCompactTokens: 300_000 } } })
+    await start($)
+    expect(await cmd($, 'status')).toContain('auto-compact at 300k')
+    // Another session turns auto-compact down to 250k in the shared store.
+    w.store.set('prefs', { ...(w.store.get('prefs') as object), autoCompactTokens: 250_000 })
+    await cmd($, 'mode balanced')
+    expect(prefsInStore(w)).toMatchObject({ mode: 'balanced', autoCompactTokens: 250_000 })
+  })
+
+  test('each turn takes up settings another session changed', SLOW, async ($, on) => {
+    const w = install(on, { store: { prefs: { version: 2, state: 'on' } } })
+    await start($)
+    w.store.set('prefs', { ...(w.store.get('prefs') as object), mode: 'economy' })
+    await turn($, 'Fix the typo in the onboarding title', 't1')
+    expect(await cmd($, 'status')).toContain('Economy')
+  })
+})

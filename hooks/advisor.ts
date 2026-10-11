@@ -182,6 +182,56 @@ export function recommend(i: AdviceInput): Recommendation[] {
 export const AUTO_COMPACT_COOLDOWN_MS = 10 * 60_000
 
 /**
+ * Smart auto-compaction: when to compact now that a main-loop turn has ended.
+ *
+ * - 'boundary': the prompt has reached the boundary size and the task in hand
+ *   is finished: its task list is complete and no check is failing. The
+ *   least that a summary can lose, and the next task starts small.
+ * - 'ceiling': the prompt has passed the ceiling, finished or not, so a long
+ *   task cannot grow without limit.
+ *
+ * Never mid-turn, after an interrupted or failed turn, while a subagent runs,
+ * or within ten minutes of the last time. Null when none of this holds.
+ */
+export function smartCompactDue(i: {
+  state: RouterState
+  smart: 'off' | 'watch' | 'on'
+  promptTokens: number
+  turnReason: string
+  agentsRunning: number
+  lastAt: number | null
+  now: number
+  boundaryTokens: number
+  ceilingTokens: number
+  tasksTotal: number
+  tasksDone: number
+  failingCheck: boolean
+}): 'boundary' | 'ceiling' | null {
+  if (i.state !== 'on' || i.smart === 'off') return null
+  if (i.turnReason !== 'answer' || i.agentsRunning > 0) return null
+  if (i.lastAt !== null && i.now - i.lastAt < AUTO_COMPACT_COOLDOWN_MS) return null
+  if (i.promptTokens >= i.ceilingTokens) return 'ceiling'
+  const finished = i.tasksTotal > 0 && i.tasksDone === i.tasksTotal && !i.failingCheck
+  if (i.promptTokens >= i.boundaryTokens && finished) return 'boundary'
+  return null
+}
+
+/** What watching smart auto-compact has shown so far, in a few lines. */
+export function watchReport(obs: readonly { at: number; tokens: number; smart: 'boundary' | 'ceiling' | null; plain: boolean; midTask: boolean }[]): string[] {
+  if (obs.length === 0) return ['No moments recorded yet: smart auto-compact notes a moment when a turn ends at a task boundary past the boundary size, or past the ceiling.']
+  const k = (n: number) => `${Math.round(n / 1000)}k`
+  const boundary = obs.filter(o => o.smart === 'boundary')
+  const ceiling = obs.filter(o => o.smart === 'ceiling')
+  const plain = obs.filter(o => o.plain)
+  const plainMid = plain.filter(o => o.midTask)
+  const lines = [
+    `Smart would have compacted ${boundary.length + ceiling.length} time(s): ${boundary.length} at a finished task${boundary.length ? ` (at ${boundary.map(o => k(o.tokens)).join(', ')})` : ''}, ${ceiling.length} past the ceiling${ceiling.length ? ` (at ${ceiling.map(o => k(o.tokens)).join(', ')})` : ''}.`,
+    `The plain threshold compacted ${plain.length} time(s)${plain.length ? `, ${plainMid.length} of them with a task still open (tasks in progress or a check failing)` : ''}.`,
+  ]
+  return lines
+}
+
+/**
  * Whether to compact on our own now that a main-loop turn has ended: routing
  * ON, the person set a threshold, the prompt reached it, the turn finished
  * normally (not interrupted or failed), no subagent is still running, and the

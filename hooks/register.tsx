@@ -28,6 +28,7 @@ import type {
 import type {
   Activity,
   Analysis,
+  CompactObservation,
   ActiveRequest,
   AgentStats,
   AgentRoute,
@@ -59,10 +60,11 @@ import {
   listStartedAt,
   phaseAgents,
   startAgent,
+  progress,
   taskList,
 } from './activity'
 import { CLASSIFIER_SYSTEM, buildClassifierPrompt, digest, parseVerdict, shouldClassify } from './classifier'
-import { autoCompactDue } from './advisor'
+import { autoCompactDue, smartCompactDue, watchReport } from './advisor'
 import { type Action, HELP, parseCommand } from './commands'
 import {
   EMPTY_HISTORY,
@@ -199,17 +201,17 @@ async function getPrefs($: Engine, canWrite = true): Promise<Prefs> {
  * classifier call still in flight.
  */
 async function setPrefs($: Engine, change: (p: Prefs) => Prefs): Promise<Prefs> {
-  await getPrefs($)
-  let before: Prefs = DEFAULT_PREFS
-  const after = await update($, prefsAtom, p => {
-    before = p
-    return normalizePrefs(change(p))
-  })
-  // Keep stored fields this version does not know: a newer copy of the mod in
-  // another session may have set them, and this write must not erase them.
+  const before = await getPrefs($)
+  // Settings are shared by every session. The change is applied to what is
+  // stored now, not to this session's copy, which another session may have
+  // made stale: a change here then never undoes one made there. Stored fields
+  // this version does not know (a newer copy's) are kept too.
   const stored = await $.store.get(STORE.prefs)
-  const unknown = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
-  await $.store.set(STORE.prefs, { ...unknown, ...after })
+  const raw = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
+  const latest = stored === undefined ? before : normalizePrefs(raw)
+  const after = normalizePrefs(change(latest))
+  await update($, prefsAtom, () => after)
+  await $.store.set(STORE.prefs, { ...raw, ...after })
   if (routingChanged(before, after)) {
     await update($, runtimeAtom, rt => ({
       ...rt,
@@ -447,8 +449,21 @@ async function ensureLoaded($: Engine): Promise<void> {
   await loadAgentStats($)
 }
 
+/** Takes up settings another session changed since this one read them (they are shared). */
+async function refreshPrefs($: Engine): Promise<void> {
+  const held = await getPrefs($)
+  const stored = await $.store.get(STORE.prefs)
+  if (stored === undefined) return
+  const latest = normalizePrefs(stored)
+  if (JSON.stringify(latest) === JSON.stringify(held)) return
+  await update($, prefsAtom, () => latest)
+  if (routingChanged(held, latest)) {
+    await update($, runtimeAtom, rt => ({ ...rt, epoch: rt.epoch + 1, phase: rt.phase ? { ...rt.phase, decision: null } : null }))
+  }
+}
+
 async function onTurnStart($: Engine, e: { text: string; turnId: string }): Promise<void> {
-  await getPrefs($)
+  await refreshPrefs($)
   await ensureLedger($)
   await ensureLoaded($)
   const current = sessionSavings(await view($, true))
@@ -1214,25 +1229,67 @@ async function refreshStatusLine($: Engine): Promise<void> {
  * turn). If they have typed again by then, compaction is refused by Claude
  * Code and skipped; the next turn end tries again.
  */
+const WATCH_LOG = 'autocompact-watch'
+
+async function loadWatchLog($: Engine): Promise<CompactObservation[]> {
+  const raw = await $.store.get(WATCH_LOG)
+  return Array.isArray(raw) ? (raw as CompactObservation[]).slice(-100) : []
+}
+
+/**
+ * At the end of a main-loop turn: compact, or (watching) note when smart
+ * auto-compact would have. Smart 'on' compacts at a finished task past the
+ * boundary size, or past the ceiling; otherwise the plain threshold decides.
+ */
 async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: number | null): Promise<void> {
   const prefs = await getPrefs($)
   const rt = await read($, runtimeAtom)
   const activity = await read($, activityAtom)
+  const validation = await read($, validationAtom)
   const now = await $.clock.now()
-  const due = autoCompactDue({
+  const tokens = contextTokens ?? rt.lastPromptTokens
+  const agentsRunning = Object.values(activity.agents).filter(g => g.status === 'running').length
+  const tasks = progress(taskList(activity, MAIN_SCOPE))
+  const failingCheck = Object.values(validation.checks).some(c => c.status === 'failed')
+  const midTask = failingCheck || (tasks !== null && tasks.done < tasks.total)
+  const smart = smartCompactDue({
     state: prefs.state,
-    threshold: prefs.autoCompactTokens,
-    promptTokens: contextTokens ?? rt.lastPromptTokens,
+    smart: prefs.autoCompactSmart,
+    promptTokens: tokens,
     turnReason,
-    agentsRunning: Object.values(activity.agents).filter(g => g.status === 'running').length,
-    lastAutoCompactAt: activity.lastAutoCompactAt,
+    agentsRunning,
+    lastAt: prefs.autoCompactSmart === 'watch' ? activity.lastWatchAt ?? null : activity.lastAutoCompactAt,
     now,
+    boundaryTokens: prefs.autoCompactBoundary,
+    ceilingTokens: prefs.autoCompactCeiling,
+    tasksTotal: tasks?.total ?? 0,
+    tasksDone: tasks?.done ?? 0,
+    failingCheck,
   })
-  if (!due) return
+  const plain =
+    prefs.autoCompactSmart !== 'on' &&
+    autoCompactDue({ state: prefs.state, threshold: prefs.autoCompactTokens, promptTokens: tokens, turnReason, agentsRunning, lastAutoCompactAt: activity.lastAutoCompactAt, now })
+  const size = Math.round(tokens / 1000)
+
+  if (prefs.autoCompactSmart === 'watch' && (smart || plain)) {
+    const entry: CompactObservation = { at: now, tokens, smart, plain, midTask }
+    await $.store.set(WATCH_LOG, [...(await loadWatchLog($)), entry].slice(-100))
+    if (smart) {
+      await patchActivity($, a => ({ ...a, lastWatchAt: now }))
+      if (!plain) {
+        const why = smart === 'boundary' ? 'the task is finished' : `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling`
+        await notify($, `Quality Router: smart auto-compact (watching) would compact now: ${why}, ${size}k tokens. Nothing was changed. (/quality-router autocompact report)`, 'info')
+      }
+    }
+  }
+
+  const act = prefs.autoCompactSmart === 'on' ? smart : plain ? 'plain' : null
+  if (!act) return
   await patchActivity($, a => ({ ...a, lastAutoCompactAt: now }))
-  const size = Math.round((contextTokens ?? rt.lastPromptTokens) / 1000)
+  const why =
+    act === 'boundary' ? 'the task is finished' : act === 'ceiling' ? `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling` : midTask ? 'past the threshold, with a task still open' : 'past the threshold'
   await scheduleCompaction($, 'auto', 1500, async r => {
-    await notify($, r.ok ? `Quality Router: auto-compacted a ${size}k-token conversation, keeping the plan and current task. ${r.text} (/quality-router autocompact off to stop)` : `Quality Router: auto-compact skipped: ${r.text}`, r.ok ? 'success' : 'warning')
+    await notify($, r.ok ? `Quality Router: auto-compacted a ${size}k-token conversation (${why}), keeping the plan and current task. ${r.text} (/quality-router autocompact off to stop)` : `Quality Router: auto-compact skipped: ${r.text}`, r.ok ? 'success' : 'warning')
   })
 }
 
@@ -1295,7 +1352,7 @@ async function compactNow($: Engine, automatic = false): Promise<CompactOutcome>
     const plan = rt.phase?.planPrompt || automatic
       ? ' Keep any plan in full: every phase or step, which are done, which is current and what comes next.'
       : ''
-    instructions = `Keep ${focus}: its goal, the decisions made, the files involved, open problems and next steps.${plan} Drop superseded detail and finished side quests.`
+    instructions = `Keep ${focus}: its goal, the decisions made, the files involved, open problems and next steps.${plan} Keep, in the person's own words where possible, the preferences and constraints they stated, the approaches already tried and rejected (and why), and any unresolved error messages verbatim. Drop superseded detail and finished side quests.`
     $.ui.status('Quality Router: compacting…')
     const r = await $.session.compact({ instructions }).catch(async (err: unknown) => {
       // An SDK host (the desktop app, -p) compacts only through the /compact
@@ -1442,6 +1499,12 @@ async function runCommand($: Engine, args: string): Promise<string> {
       return tipsText(await view($, null))
     case 'compact':
       return compactFromUser($, 'command')
+    case 'autocompact-report': {
+      const p = await getPrefs($)
+      const mode = p.autoCompactSmart === 'on' ? 'on' : p.autoCompactSmart === 'watch' ? 'watching' : 'off'
+      const head = `Smart auto-compact: ${mode} · at a finished task from ${Math.round(p.autoCompactBoundary / 1000)}k tokens · mid-task past ${Math.round(p.autoCompactCeiling / 1000)}k${p.autoCompactTokens !== null && p.autoCompactSmart !== 'on' ? ` · plain threshold ${Math.round(p.autoCompactTokens / 1000)}k in charge` : ''}`
+      return [head, ...watchReport(await loadWatchLog($)).map(l => `  ${l}`), p.autoCompactSmart === 'watch' ? '  /quality-router autocompact smart switches to it.' : ''].filter(Boolean).join('\n')
+    }
     case 'savings':
       return savingsText(await view($, null))
     case 'reset-task':
