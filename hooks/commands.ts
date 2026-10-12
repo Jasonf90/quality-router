@@ -122,7 +122,7 @@ export function parseCommand(args: string): Action {
       if (a1 === 'smart') {
         return prefs(
           p => ({ ...p, autoCompactSmart: 'on' }),
-          'smart auto-compact on: compacts when a task is finished (task list complete, no check failing) once the conversation is past the boundary size, and mid-task only past the ceiling',
+          'smart auto-compact on: compacts when a piece of work is finished (committed this turn, checks passing or task list complete, and no check failing) once the conversation is past the boundary size, and mid-task only past the ceiling',
         )
       }
       if (a1 === 'watch') {
