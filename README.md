@@ -168,7 +168,14 @@ Honesty rules:
 - **When the work is finished:** a commit succeeded during the reply, or the checks pass against the current code, or the task list is complete; and no check is failing. Then, once the conversation is past **150k** tokens, it compacts: little is lost, and the next task starts small.
 - **Mid-task only past 400k:** a long task is still trimmed, but a task in progress is otherwise left alone, because a summary written mid-task can drop the error messages and the fixes already tried.
 - On four recorded sessions, this compacted mid-work far less often than a plain 300k rule (1–5 times against 3–13) and saved 39–56% against 36–46%. Those figures assume every summary keeps what the next step needs; they measure cost and timing, not summary quality.
-- Compaction can only run when Claude stops and waits for you. One long, unbroken stretch of work (a single prompt that runs for half an hour) cannot be compacted until it ends; Claude Code's own compaction near the context limit still applies.
+- Compaction can only run when Claude stops and waits for you. One long, unbroken stretch of work (a single prompt that runs for half an hour) cannot be compacted by the router until it ends. **Claude Code's own compaction can run mid-turn**, but by default only near the 1M limit. Lower it in the `env` block of `~/.claude/settings.json`:
+
+  ```json
+  { "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "450000" } }
+  ```
+
+  Claude Code then compacts on its own at about 417k (it keeps a ~33k buffer), mid-turn too. On recorded long sessions this, with smart auto-compact, cut cost by a further 1–35 points over the router alone (most where one turn ran to 700k+), at the price of a few compactions mid-work. The band suggests it when a turn grows past 500k, and `/quality-router status` shows the window in use.
+- **Claude Code's own compactions get the router's instructions too** (at its threshold, a summary it computes ahead, or a bare `/compact`), so they keep the plan, your stated preferences, rejected approaches and unresolved errors. A `/compact` you type with your own text is left as you wrote it.
 - Sizes: `autocompact boundary <size>`, `autocompact ceiling <size>`.
 
 *Watching first:* `/quality-router autocompact watch` leaves the plain threshold in charge and changes nothing, but notes each moment smart *would* have compacted. A line appears in the band ("would compact now: the task is finished, 180k tokens"), and `/quality-router autocompact report` lists the moments, and how many plain compactions happened with a task still open. When the timing looks right, `autocompact smart` switches over.
@@ -244,7 +251,7 @@ The command is registered as `immediate`, so `/quality-router off` works mid-tur
 
 These are checked by their own tests (`escalation.test.ts`, `policy.test.ts`):
 
-- **Follow-ups carry the task on.** "ok implement it", "the test still fails, try a different approach", "go with option 2" and background tasks reporting back keep the task's risk, tier and escalations. A follow-up can raise the task ("…and do the same across the whole app"), never lower it. A reply that names a file, or brings its own high risk, is new work.
+- **Follow-ups carry the task on.** "ok implement it", "the test still fails, try a different approach", "go with option 2", "what is next", "do all as recommended" and background tasks reporting back keep the task's risk, tier and escalations. A follow-up can raise the task ("…and do the same across the whole app"), never lower it. A reply that names a file, or brings its own high risk, is new work.
 - **Risk found while working lasts.** Once a task touches a sensitive file (auth, payments, keychain…) or runs a destructive command, it stays on the strongest tier for the rest of the task, whatever is decided later. Two edits in one response are both seen.
 - **A task list never lowers the prompt's risk.** A vague prompt ("start phase 3") is judged from the task list Claude writes; a risky prompt keeps its risk however routine the tasks sound, and any task can be raised by its list.
 - **Checks it cannot see the end of don't count.** A test run sent to the background is not recorded as a pass. Repairs that only rewrite tests, or are written with `sed`, count as repair attempts.
@@ -272,7 +279,7 @@ Switching the *main conversation* to another model throws away the prompt cache.
 - **The cache's lifetime is learned, not assumed.** Claude Code doesn't report it per request, so with `cache-ttl auto` (the default) the router watches requests after idle gaps: a large cache read after more than 5 minutes means the 1-hour cache. Until it sees repeated expiries it assumes 1 hour, the conservative choice for switching (the desktop app's sessions observed so far all used it).
 - It switches only when the saving repays the switch within the phase, with a 1.5× margin. The band then says why, e.g. `kept middle: switching pays back after ~60 requests at 602k tokens (warm cache)`.
 - **Cold cache:** staying would write the cache once; switching writes the new model's cache now *and* the old model's again on the way back. So on a cold cache the new model's whole write is still a cost, though only half of the warm case. A small cold conversation pays quickly; a large one rarely does.
-- **After a compaction** the conversation is small and uncached, so the next decision starts from the new size.
+- **After a compaction** the conversation is small and uncached, so the next decision starts from the new size. When Claude Code does not report that size, the router assumes what every request carries (system prompt and tools) plus a summary, never zero, so a switch never looks free.
 - **No price for the model** (e.g. `claude-opus-5`): it falls back to the plain rule of no downgrade above 80k tokens.
 - **Upgrades for quality are never held.**
 

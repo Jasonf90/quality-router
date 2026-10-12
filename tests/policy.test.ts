@@ -173,7 +173,7 @@ describe('phases and subagents', () => {
 describe('follow-ups carry the task on (reviewer cases)', () => {
   const follow = (t: string) => isFollowUp(t, analyzePrompt(t))
   test('short replies that point at the work in hand are follow-ups', () => {
-    for (const t of ['ok implement it', 'Looks good, proceed with the implementation', 'go ahead and do it', 'the test still fails, try a different approach', 'yes, go with option 2', '<task-notification>agent finished</task-notification>', 'yes'])
+    for (const t of ['ok implement it', 'Looks good, proceed with the implementation', 'go ahead and do it', 'the test still fails, try a different approach', 'yes, go with option 2', '<task-notification>agent finished</task-notification>', 'yes', 'what is next', "what's next?", 'do all as recommended', 'go ahead with everything', 'keep going'])
       expect(`${t}: ${follow(t)}`).toBe(`${t}: true`)
   })
   test('new work is not: a named file, its own risk, a design question, or a plain new ask', () => {

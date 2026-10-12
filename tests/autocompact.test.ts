@@ -5,7 +5,7 @@ import { AUTO_COMPACT_COOLDOWN_MS, autoCompactDue, smartCompactDue, watchReport 
 import { parseCommand } from '../hooks/commands'
 import { compactCommandFailed, needsCompactCommand } from '../hooks/core'
 import { normalizePrefs } from '../hooks/settings'
-import { BAND_PROPS, SLOW, SPAWN, bash, cmd, edit, install, start, step, tool } from './harness'
+import { BAND_PROPS, SLOW, SPAWN, bash, cmd, edit, install, start, step, tool, turn } from './harness'
 
 const due = { state: 'on' as const, threshold: 300_000, promptTokens: 400_000, turnReason: 'answer', agentsRunning: 0, lastAutoCompactAt: null, now: 1_000_000 }
 
@@ -302,5 +302,32 @@ describe('smart auto-compact in the session (mock integration)', () => {
     expect(report).toContain('1 when work is finished (at 180k)')
     expect(report).toContain('1 of them with work unfinished')
     expect(await cmd($, 'status')).toContain('smart auto-compact watching')
+  })
+})
+
+describe("Claude Code's own compactions (mock integration)", () => {
+  test('its automatic compactions, mid-turn included, get the router instructions; a /compact with its own text keeps it', SLOW, async ($, on) => {
+    const w = install(on)
+    await start($)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'earlier work', toolUses: [] }] } as never)
+    expect(w.compactions.length).toBe(1)
+    expect(w.compactions[0]).toContain('approaches already tried and rejected')
+    expect(w.compactions[0]).toContain('Keep any plan in full')
+    await $.session.compact({ trigger: 'manual', instructions: 'keep the API notes', messages: [{ role: 'user', text: 'earlier work', toolUses: [] }] } as never)
+    expect(w.compactions[1]).toBe('keep the API notes')
+  })
+
+  test('after a compaction whose size is not reported, a model switch is not treated as free', SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = { input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 0 }
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'Plan how to add OAuth login with refresh tokens to the app', 't1')
+    expect(w.sent[0]?.model).toBe('claude-opus-5-5')
+    await cmd($, 'compact')
+    await w.clock.advance(300)
+    expect(w.compactions.length).toBe(1)
+    await turn($, 'How does the settings screen decide which theme to show?', 't2')
+    expect(w.sent[1]?.model).toBe('claude-opus-5-5')
   })
 })

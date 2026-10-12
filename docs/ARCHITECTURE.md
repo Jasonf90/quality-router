@@ -101,6 +101,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 | Price catalogue for plugins | **Unsupported** | Dated, sourced prices are configuration |
 | Cache-write TTL per request | **Unsupported** (only `Pre/PostModelSwitch` carry `cache_ttl`, on manual switches) | Inferred (`cache-ttl auto`): a large cache read after a 5.5–55 min idle gap on the same model means the 1-hour cache; repeated full rewrites mean 5 minutes. 1 hour until then |
 | Prompt box from a mod in an SDK host | **Refused** (`prompt.fill` → `no_composer`, verified on 2.1.296) | Start fresh asks for a second press in the band and runs `/clear` with `$.command.run` |
+| Claude Code's own compaction size | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (env), verified with `/context` on 2.1.296: `400000` makes the window 400k with a 33k buffer | Not settable by a mod; recommended in the README and the band. The router's `session.compact` hook adds its summary instructions to Claude Code's own compactions (`auto`, `precompute`, a bare `manual`) |
 | Notifications in the desktop app | Sent (`ui_toast`), display not confirmed | Outcomes also stay as a line in the band for 3 minutes |
 | Running validation commands | Deliberately not done | Would bypass the permission flow; checks are observed only |
 | Global hotkey | Not used | Button hotkeys work only while the band has focus |
@@ -137,7 +138,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 
 ## Test coverage
 
-`claude plugin test` runs 219 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
+`claude plugin test` runs 222 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
 
 | Area | Unit (pure) | Mock integration (native kit) | Live |
 |---|---|---|---|

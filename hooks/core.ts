@@ -105,6 +105,19 @@ export function compactCommandFailed(output: string): boolean {
   return /error|fail|not enough|cannot|can't|nothing to compact/i.test(output)
 }
 
+/**
+ * What a summary should keep, for every compaction the router starts or
+ * shapes: the task's goal, decisions, files, open problems and next steps,
+ * the plan in full when there is one, and what summaries tend to lose (the
+ * person's stated preferences and constraints, approaches already rejected,
+ * unresolved errors word for word).
+ */
+export function compactInstructions(category: string | null, keepPlan: boolean): string {
+  const focus = category ? `the current ${category} task` : 'the current task'
+  const plan = keepPlan ? ' Keep any plan in full: every phase or step, which are done, which is current and what comes next.' : ''
+  return `Keep ${focus}: its goal, the decisions made, the files involved, open problems and next steps.${plan} Keep, in the person's own words where possible, the preferences and constraints they stated, the approaches already tried and rejected (and why), and any unresolved error messages verbatim. Drop superseded detail and finished side quests.`
+}
+
 export function reviewPrompt(files: string): string {
   return `${REVIEW_PROMPT_HEAD} of the changes just made${files ? ` to ${files}` : ''}. Check correctness, authentication, data handling and error paths. Report findings first; change code only to fix a defect you can demonstrate.`
 }

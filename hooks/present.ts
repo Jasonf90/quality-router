@@ -249,6 +249,7 @@ export function recommendations(v: View): Recommendation[] {
     state: v.prefs.state,
     mode: v.prefs.mode,
     contextPercent: v.activity.context?.percent ?? null,
+    contextWindow: v.activity.context?.window ?? null,
     promptTokens: v.activity.context?.tokens ?? rt.lastPromptTokens,
     isWorking: v.isWorking,
     idleMs: (v.rt.lastMainRequestAt ?? v.activity.lastRequestAt) === null ? null : v.now - ((v.rt.lastMainRequestAt ?? v.activity.lastRequestAt) as number),

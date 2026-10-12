@@ -77,3 +77,12 @@ describe('recommendations (pure)', () => {
     expect(ids({ contextPercent: 95, dismissed: ['context-high'] })).toEqual(['context-critical'])
   })
 })
+
+describe('the compaction window tip', () => {
+  test("suggested when a turn has grown past 500k and Claude Code compacts only near 1M; not once it compacts sooner", () => {
+    expect(ids({ promptTokens: 600_000, contextWindow: 1_000_000 })).toContain('compact-window')
+    expect(ids({ promptTokens: 600_000, contextWindow: null })).toContain('compact-window')
+    expect(ids({ promptTokens: 600_000, contextWindow: 450_000 })).not.toContain('compact-window')
+    expect(ids({ promptTokens: 300_000, contextWindow: 1_000_000 })).not.toContain('compact-window')
+  })
+})

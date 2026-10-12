@@ -22,6 +22,8 @@ export type AdviceInput = {
   idleMs: number | null
   /** How long the prompt cache lasts (the inferred or configured lifetime); 5 minutes when not given. */
   cacheTtlMs?: number
+  /** The window Claude Code compacts against (the model's limit, or CLAUDE_CODE_AUTO_COMPACT_WINDOW), when known. */
+  contextWindow?: number | null
   /** Verdict of the current phase's checks against the current code. */
   phaseVerdict: 'verified' | 'failed' | 'unverified'
   /** Context the current phase inherited from earlier ones, and how many came before it. */
@@ -148,6 +150,19 @@ export function recommend(i: AdviceInput): Recommendation[] {
       title: `${i.phaseOrdinal + 1} tasks in one session`,
       detail: `Every request carries about ${k} tokens of all of them. One session per task keeps requests small.`,
       action: 'new-session',
+    })
+  }
+
+  // The router compacts only between turns; Claude Code's own compaction can
+  // run mid-turn, but by default only near a 1M window. A long stretch of work
+  // past 500k means the default is costing far more than it needs to.
+  if (i.promptTokens >= 500_000 && (i.contextWindow ?? 1_000_000) >= 900_000) {
+    out.push({
+      id: 'compact-window',
+      severity: 'warn',
+      title: `Conversations grow to ${k} inside long turns: let Claude Code compact sooner`,
+      detail: 'The router can compact only when a turn ends. Setting CLAUDE_CODE_AUTO_COMPACT_WINDOW=450000 in the env block of ~/.claude/settings.json makes Claude Code compact on its own at about 417k, mid-turn too, with the router\'s summary instructions. On recorded long sessions that cut cost by a further 1-35 percentage points.',
+      action: null,
     })
   }
 

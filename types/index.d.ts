@@ -253,6 +253,8 @@ export type Runtime = {
   loaded?: boolean
   /** A git commit succeeded in the main loop during the current turn: a finished unit of work. */
   turnCommitted?: boolean
+  /** The smallest main-loop prompt seen this session: what every request carries (system prompt, tools) before any conversation. */
+  basePrompt?: number
 }
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }

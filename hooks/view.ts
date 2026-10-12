@@ -178,13 +178,15 @@ function tokensRow(label: string, b: Bucket): string {
   return `  ${label}: ${b.requests} req · in ${compact(t.input)} · out ${compact(t.output)} · cache read ${compact(t.cacheRead)} · cache write ${compact(t.cacheWrite)}${unknown}`
 }
 
-export function statusText(s: Snapshot): string {
+/** `engineWindow`: the window Claude Code compacts against, when a context reading has said. */
+export function statusText(s: Snapshot, engineWindow: number | null = null): string {
   const lines = [`${headline(s).text} · ${modeLabel(s.prefs)} · ${selection(s)}`]
   for (const extra of [effortText(s), active(s), observed(s), reason(s), escalation(s), checksLine(s), degraded(s), weeklyLine(s)]) {
     if (extra) lines.push(`  ${extra}`)
   }
   const onlyOn = s.prefs.state === 'on' ? '' : ' (runs only while routing is ON)'
   const k = (n: number) => `${Math.round(n / 1000)}k`
+  if (engineWindow) lines.push(`  Claude Code compacts on its own (mid-turn too) near ${k(engineWindow)}${engineWindow >= 900_000 ? ': CLAUDE_CODE_AUTO_COMPACT_WINDOW=450000 would cap long turns at about 417k' : ''}`)
   if (s.prefs.autoCompactSmart === 'on') {
     lines.push(`  auto-compact: smart, when work is finished from ${k(s.prefs.autoCompactBoundary)} tokens, mid-task past ${k(s.prefs.autoCompactCeiling)}${onlyOn}`)
   } else {

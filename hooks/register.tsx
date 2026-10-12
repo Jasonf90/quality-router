@@ -78,6 +78,7 @@ import {
   type StepPlan,
   checkOutcome,
   codeVersions,
+  compactInstructions,
   compactCommandFailed,
   emptyArm,
   experimentReport,
@@ -795,6 +796,7 @@ async function finishStep(
       observedModel: res.usage?.model ?? r.observedModel,
       lastPromptTokens: usage ? promptTokens(usage) : r.lastPromptTokens,
       lastMainRequestAt: t1,
+      basePrompt: usage && (r.basePrompt === undefined || promptTokens(usage) < r.basePrompt) ? promptTokens(usage) : r.basePrompt,
       lastRoutedTier: tierOfModel(plan.model, prefs) ?? r.lastRoutedTier,
     }
   })
@@ -1325,7 +1327,10 @@ async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: nu
 async function onCompacted($: Engine, tokensAfter: number | null): Promise<void> {
   await patchRuntime($, r => ({
     ...r,
-    lastPromptTokens: tokensAfter ?? 0,
+    // Unknown (a /compact run as a command does not report it): what every
+    // request carries anyway plus a summary, never zero, which would make a
+    // model switch look free.
+    lastPromptTokens: tokensAfter ?? (r.basePrompt ?? 60_000) + 25_000,
     lastMainRequestAt: null,
     phase: r.phase ? { ...r.phase, decision: null } : r.phase,
   }))
@@ -1372,11 +1377,7 @@ async function compactNow($: Engine, automatic = false): Promise<CompactOutcome>
   let instructions = 'Keep the current task: its goal, the decisions made, the files involved, open problems and next steps.'
   try {
     const rt = await read($, runtimeAtom)
-    const focus = rt.phase?.analysis ? `the current ${rt.phase.analysis.category} task` : 'the current task'
-    const plan = rt.phase?.planPrompt || automatic
-      ? ' Keep any plan in full: every phase or step, which are done, which is current and what comes next.'
-      : ''
-    instructions = `Keep ${focus}: its goal, the decisions made, the files involved, open problems and next steps.${plan} Keep, in the person's own words where possible, the preferences and constraints they stated, the approaches already tried and rejected (and why), and any unresolved error messages verbatim. Drop superseded detail and finished side quests.`
+    instructions = compactInstructions(rt.phase?.analysis?.category ?? null, rt.phase?.planPrompt === true || automatic)
     $.ui.status('Quality Router: compacting…')
     const r = await $.session.compact({ instructions }).catch(async (err: unknown) => {
       // An SDK host (the desktop app, -p) compacts only through the /compact
@@ -1508,7 +1509,7 @@ async function runCommand($: Engine, args: string): Promise<string> {
     case 'error':
       return `Quality Router: ${action.message}`
     case 'status':
-      return statusText(await snapshot($, true))
+      return statusText(await snapshot($, true), (await read($, activityAtom)).context?.window ?? null)
     case 'set-state':
       return setRouterState($, action.state)
     case 'toggle':
@@ -1702,7 +1703,19 @@ export const register: Register = on => {
   // own): what each request re-sends starts over. The router's own calls do
   // not pass through here; compactNow records those itself.
   on('session.compact', async ($, e, next) => {
-    const r = await next(e)
+    // Claude Code's own compactions (at its threshold, mid-turn included, a
+    // summary computed ahead for one, or a bare /compact) get the same
+    // instructions as the router's, so they keep what summaries tend to lose.
+    let input = e
+    if (e.agentId === undefined && !e.instructions && e.trigger !== 'plugin') {
+      try {
+        const rt = await read($, runtimeAtom)
+        input = { ...e, instructions: compactInstructions(rt.phase?.analysis?.category ?? null, true) }
+      } catch {
+        input = e
+      }
+    }
+    const r = await next(input)
     if (e.trigger !== 'precompute' && e.agentId === undefined && !('skip' in r && r.skip !== undefined)) {
       await safe(() => onCompacted($, r.tokensAfter ?? null))
     }

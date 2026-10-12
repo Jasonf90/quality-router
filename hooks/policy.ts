@@ -110,7 +110,7 @@ export function isContinuation(text: string): boolean {
 }
 
 /** A short reply that points back at the work in hand rather than naming new work. */
-const REFERS_BACK = /^(ok(ay)?|yes|yep|yeah|sure|great|perfect|thanks|looks good|sounds good|lgtm|go ahead|please|proceed|continue|now)\b|\b(the plan|that plan|this plan|the fix|that fix|the change|those changes|these changes|the approach|that approach|the same|it still|still (fails?|failing|broken|crash\w*|doesn'?t|not|happens|wrong)|(try|do) (it |that |this )?again|instead|try (a |another |a different )|different approach|as (you|we) (said|discussed|planned|suggested)|implement (it|that|this|the plan|them)|do (it|that|this|them|both)|go with (option|that|it|the|your)|option \d|both of them|all of them)\b/
+const REFERS_BACK = /^(ok(ay)?|yes|yep|yeah|sure|great|perfect|thanks|looks good|sounds good|lgtm|go ahead|please|proceed|continue|now)\b|\b(the plan|that plan|this plan|the fix|that fix|the change|those changes|these changes|the approach|that approach|the same|it still|still (fails?|failing|broken|crash\w*|doesn'?t|not|happens|wrong)|(try|do) (it |that |this )?again|instead|try (a |another |a different )|different approach|as (you|we) (said|discussed|planned|suggested|recommended|proposed)|as (recommended|suggested|planned|proposed|discussed)|implement (it|that|this|the plan|them)|do (it|that|this|them|both|all|everything)|go (ahead )?with (option|that|it|the|your|all|everything)|option \d|both of them|all of them|what('?s| is) next|next steps?|keep going|carry on|your (recommendations?|suggestions?|plan))\b/
 
 /**
  * A prompt that carries on the task in hand: a bare continuation ("yes", "go
