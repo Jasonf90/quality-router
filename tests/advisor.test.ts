@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { type AdviceInput, recommend } from '../hooks/advisor'
 import type { Projection } from '../hooks/limits'
+import { SLOW, cmd, install, start, step } from './harness'
 
 const BASE: AdviceInput = {
   state: 'on',
@@ -104,5 +105,24 @@ describe('learned from the sessions of Oct 12-14', () => {
     expect(tip?.detail).toContain('$0.10 from the cache on claude-opus-5 against $0.04 on claude-opus-5-5')
     expect(tip?.detail).toContain('/model claude-opus-5-5')
     expect(ids({ promptTokens: 200_000, pricierModel: null })).not.toContain('pricier-model')
+  })
+})
+
+describe('the pricier-model tip in a session (mock integration)', () => {
+  async function tipsOn($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], model: string): Promise<string> {
+    const w = install(on)
+    w.context = { tokens: 200_000, window: 1_000_000, percent: 20 }
+    await start($)
+    await cmd($, 'on')
+    await $.turn.start({ text: 'Fix the crash when saving a routine', turnId: 't1' })
+    await step($, { turnId: 't1', model })
+    await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+    return cmd($, 'tips')
+  }
+  test('a session on Opus 5 (its 1M variant too) is told what Opus 5.5 would cost', SLOW, async ($, on) => {
+    expect(await tipsOn($, on, 'claude-opus-5[1m]')).toContain('/model claude-opus-5-5')
+  })
+  test('a session on Opus 5.5 is not', SLOW, async ($, on) => {
+    expect(await tipsOn($, on, 'claude-opus-5-5[1m]')).not.toContain('/model claude-opus-5-5')
   })
 })

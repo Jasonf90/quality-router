@@ -239,7 +239,8 @@ export function agentRow(a: Activity, g: AgentActivity, now: number, stats: Agen
 
 /** The session's own model, when the router's model for the same tier costs less to read from the cache. */
 function pricierModel(v: View): { model: string; cheaper: string; readUsd: number; cheaperReadUsd: number; cheaperWriteUsd: number } | null {
-  const model = v.rt.sessionModel
+  // A context-window variant (`claude-opus-5[1m]`) is priced as its model.
+  const model = v.rt.sessionModel?.replace(/\[[^\]]*\]$/, '') ?? null
   const tier = tierOfModel(model, v.prefs)
   if (!model || !tier) return null
   const cheaper = v.prefs.models[tier]
