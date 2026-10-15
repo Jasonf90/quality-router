@@ -2,6 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { type AdviceInput, recommend } from '../hooks/advisor'
 import type { Projection } from '../hooks/limits'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
+
 import { SLOW, cmd, install, start, step } from './harness'
 
 const BASE: AdviceInput = {
@@ -109,7 +112,7 @@ describe('learned from the sessions of Oct 12-14', () => {
 })
 
 describe('the pricier-model tip in a session (mock integration)', () => {
-  async function tipsOn($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], model: string): Promise<string> {
+  async function tipsOn($: Engine, on: On, model: string): Promise<string> {
     const w = install(on)
     w.context = { tokens: 200_000, window: 1_000_000, percent: 20 }
     await start($)
