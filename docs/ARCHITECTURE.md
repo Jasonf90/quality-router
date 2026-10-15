@@ -31,17 +31,28 @@ Claude Code requires every use of `$` to stay in the hooks module itself: `claud
 
 | Event | What the router does |
 |---|---|
-| `session.start` | Registers `/quality-router`, loads preferences from `$.store`, restores this session's ledger and limit readings, reads `<project>/.claude/quality-router.json` |
-| `turn.start` | A new prompt starts a **phase**: the rules analyse it and the text is kept in memory for a possible classifier call. Follow-ups such as "yes" or "go ahead" continue the current phase. |
+| `session.start` | Registers `/quality-router`, loads preferences from `$.store` (undoing an older copy's overwrite, below), restores this session's ledger and limit readings, reads `<project>/.claude/quality-router.json` |
+| `turn.start` | Takes up settings changed elsewhere, after checking their stamp. A new prompt starts a **phase**: the rules analyse it and the text is kept in memory for a possible classifier call. Follow-ups such as "yes" or "go ahead" continue the current phase; one that sets the last answer's proposal going is raised to what that proposal demands. |
 | `turn.step` | For every model request (main loop and subagents): decide once per phase (and per epoch), then rewrite `model`/`effort` on the way down when ON. Records the API-reported usage. If a routed request returns nothing at all, it is re-sent unchanged. |
 | `agent.spawn` | Picks a built-in subagent's model when it starts. Explicit models, forks, teammates, workflow agents and plugin-defined agents are left alone. |
 | `tool.call` | After the tool runs: edits move the code state, checks are recorded against it, failures feed escalation, sensitive edits and destructive commands raise risk. Results pass through untouched. |
 | `classic.PostToolUse`, `classic.Stop` | Read the effort level Claude Code reports as applied (main loop), shown beside the effort the router sent |
 | `classic.PostModelSwitch` | A `/model` or picker change pauses routing (manual precedence). An engine fallback marks the router degraded. |
-| `turn.complete` | Cross-checks the turn total against its requests, reads context fill, plan limits and `/cost`, may suggest a review, persists the ledger and the per-session savings estimate. A subagent's completion ends its activity row (done / failed / stopped). |
+| `turn.complete` | Judges the answer's opening and end for high-risk or design work it proposes (`policy.answerDemands`, the verdict alone is kept). Cross-checks the turn total against its requests, reads context fill, plan limits and `/cost`, may suggest a review, persists the ledger and the per-session savings estimate. A subagent's completion ends its activity row (done / failed / stopped). |
 | `session.measure` | Records new plan-limit readings |
 | `session.end` | Finishes a running experiment and persists the ledger |
 | `ui.render` `AbovePrompt` / `Pane` | Band and detail pane. Another mod's band content is kept beneath the router's. |
+
+## Shared settings
+
+Settings live in `$.store` and every session reads them, so a session still running an older copy of the router can save its stale copy over them. On Oct 14 one such session (started Oct 9) set Economy and turned auto-compact off. From 0.9.0:
+
+- **Every write is stamped.** A write from this version carries a hash of everything else stored with the settings (`settings.prefsStamp`), and is also kept as `prefs-good`.
+- **Mismatches are older copies.** An older copy does not recompute the stamp, so stored settings whose stamp does not match came from one: copies before 0.8.1 drop it, and 0.8.1–0.8.5 keep it stale.
+- **The reference is put back.** At the next turn start (or session start, or before any change), `prefs-good` is restored. A notice names what had changed, and `prefs-restored` keeps the last 20 such events.
+- **First run.** With no reference yet, what is stored is adopted.
+
+The hash covers whatever is stored, not a field list, so a newer guarded copy's fields never look like an older copy's write.
 
 ## The decision
 
@@ -117,6 +128,8 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 
 - **Live API acceptance of routed models is unverified here.** The headless smoke test couldn't refresh OAuth from the sandbox. Verify with the dry-run → ON steps in [EVALUATION.md](EVALUATION.md) and check the pane's *observed* model.
 - **Phase detection is heuristic.** A short reply that points at the work in hand ("ok implement it", "still failing") continues the task; a reply that names a file or brings its own high risk starts a new one. A genuinely new short task phrased like a follow-up stays on the current task's tier (a cost, never a quality loss).
+- **A proposal is read from the answer's words.** Only the opening 1,500 and closing 2,500 characters are read, with the same rules as a prompt. A risk mentioned only in the middle of a long answer is not seen; one mentioned in passing at the end raises the reply that follows (a cost, never a quality loss).
+- **The settings guard undoes changes made in an older session on purpose too.** It cannot tell a deliberate press in an older copy's band from a stale save, so it restores and says so; make the change again in a current session.
 - **The cache-aware savings estimate is a model.** It holds output tokens equal across paths and approximates the conversation's growth at a model switch (another model can encode the same history in fewer tokens). On the audited sessions two independent versions of it differed by $7–13 on a $220 session; both agreed on the direction.
 - **Auto-compaction needs a turn end.** A mod cannot compact while a turn runs, so a single long agentic turn grows until it ends (or until Claude Code's own compaction). The usage record is saved every 25 requests or 10 minutes, so long turns no longer leave it only in memory.
 - **A manual `/model` pause does not survive `/clear`** (the engine resets the mod's state). The project file and stored history are re-read after `/clear`.

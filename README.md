@@ -157,7 +157,9 @@ Honesty rules:
 | Checks passed and the prompt is ≥ 40k tokens | A new session for the next task | **Start fresh** |
 | Idle past the cache's lifetime (an hour, or 5 minutes where that is observed) with a large prompt | The cache has likely expired, so this is the cheapest moment to switch | **Start fresh** |
 | 5+ tasks in one session on ≥ 80k tokens | One session per task | **Start fresh** |
-| Weekly limit projected before reset | Economy mode and fresher sessions | **Economy mode** |
+| Weekly limit projected before reset, smart auto-compact off | Smart compaction first: it leaves the choice of model alone | **Smart compaction** |
+| Weekly limit projected before reset, smart auto-compact on | Fresher sessions, or Economy mode (which trades some quality) | **Economy mode** |
+| The session runs a model that costs more than the router's model for its tier (Opus 5 where the strong tier is Opus 5.5) | What each request reads from the cache on each, and what switching costs once | none: the router keeps the model you chose for its tier, so only you can switch (`/model`) |
 | DRY RUN would have saved ≥ $0.10 | Turning routing on | **Turn on** |
 
 **Auto-compact (opt-in)** comes in two kinds.
@@ -168,6 +170,7 @@ Honesty rules:
 - **When the work is finished:** a commit succeeded during the reply, or the checks pass against the current code, or the task list is complete; and no check is failing. Then, once the conversation is past **150k** tokens, it compacts: little is lost, and the next task starts small.
 - **Mid-task only past 400k:** a long task is still trimmed, but a task in progress is otherwise left alone, because a summary written mid-task can drop the error messages and the fixes already tried.
 - On four recorded sessions, this compacted mid-work far less often than a plain 300k rule (1–5 times against 3–13) and saved 39–56% against 36–46%. Those figures assume every summary keeps what the next step needs; they measure cost and timing, not summary quality.
+- In use (Oct 12–14, two busy sessions, 39 smart compactions): together they cost about $15 and saved about $113 over the requests that followed (list prices), each one paying for itself several times over except one made just before a session went quiet, and no reply after any of them suggested lost context.
 - Compaction can only run when Claude stops and waits for you. One long, unbroken stretch of work (a single prompt that runs for half an hour) cannot be compacted by the router until it ends. **Claude Code's own compaction can run mid-turn**, but by default only near the 1M limit. Lower it in the `env` block of `~/.claude/settings.json`:
 
   ```json
@@ -239,7 +242,7 @@ The command is registered as `immediate`, so `/quality-router off` works mid-tur
 
 `tests/guarantees.test.ts` checks these rules over every combination the router's decision can see: each task category, risk, ambiguity, breadth, rules tier, confidence, mode, session effort, and the escalation, classifier-fallback and failed-check flags (437,400 decisions per rule):
 
-- High-risk work (auth, payments, privacy, migrations, security, production, sensitive data) always runs on the strongest tier, in every mode.
+- High-risk work (auth, payments, privacy, migrations, security, production, sensitive data, store releases, data that syncs across devices) always runs on the strongest tier, in every mode.
 - Tasks judged to be code work (implementing, fixing, testing, refactoring, reviewing, design, diagnosis) never start on the cheap tier, in any mode. A *mechanical* edit is only one with no fix, refactor or behaviour change in it: "fix the typo" is mechanical, "bump the version and fix the crash" or "change the validation so…" is not.
 - A task that did start on the cheap tier (a look-up, summary or question) and then writes code moves up to the middle tier for the rest of the task. This applies to an edit to a source file, or a shell command that plainly writes one (`sed -i`, a redirect, `tee`). Mechanical edits (typos, renames, version bumps) stay where they are. Unlike the rules above, this one is checked by its own tests, not the exhaustive sweep.
 - In quality-first, the cheap tier gets only mechanical edits, look-ups, summaries and classification.
@@ -252,6 +255,8 @@ The command is registered as `immediate`, so `/quality-router off` works mid-tur
 These are checked by their own tests (`escalation.test.ts`, `policy.test.ts`):
 
 - **Follow-ups carry the task on.** "ok implement it", "the test still fails, try a different approach", "go with option 2", "what is next", "do all as recommended" and background tasks reporting back keep the task's risk, tier and escalations. A follow-up can raise the task ("…and do the same across the whole app"), never lower it. A reply that names a file, or brings its own high risk, is new work.
+- **"Yes" starts what the last answer proposed.** A reply that sets the proposed work going ("yes", "do it for me", "let's start working the plan", "continue with what you recommend") is judged by that proposal too. When Claude's last answer proposed high-risk or design work, the task runs on the strongest tier. Only the opening and the end of the answer are read, and only the verdict is kept, never the text. A reply that only asks ("what's next?") is not raised. In the sessions this came from, a plan for iCloud sync had run 772 requests on the middle tier after "let's start working the plan"; on the same transcripts this rule raises 27 replies, 24 of which ran on Opus anyway.
+- **Data that syncs across devices is high risk.** iCloud and CloudKit sync, cross-device continuity, sync conflicts and deploying a schema to production run on the strongest tier: a sync bug reaches every device a person owns, and a CloudKit production schema cannot be taken back.
 - **Risk found while working lasts.** Once a task touches a sensitive file (auth, payments, keychain…) or runs a destructive command, it stays on the strongest tier for the rest of the task, whatever is decided later. Two edits in one response are both seen.
 - **A task list never lowers the prompt's risk.** A vague prompt ("start phase 3") is judged from the task list Claude writes; a risky prompt keeps its risk however routine the tasks sound, and any task can be raised by its list.
 - **Checks it cannot see the end of don't count.** A test run sent to the background is not recorded as a pass. Repairs that only rewrite tests, or are written with `sed`, count as repair attempts.
@@ -280,7 +285,7 @@ Switching the *main conversation* to another model throws away the prompt cache.
 - It switches only when the saving repays the switch within the phase, with a 1.5× margin. The band then says why, e.g. `kept middle: switching pays back after ~60 requests at 602k tokens (warm cache)`.
 - **Cold cache:** staying would write the cache once; switching writes the new model's cache now *and* the old model's again on the way back. So on a cold cache the new model's whole write is still a cost, though only half of the warm case. A small cold conversation pays quickly; a large one rarely does.
 - **After a compaction** the conversation is small and uncached, so the next decision starts from the new size. When Claude Code does not report that size, the router assumes what every request carries (system prompt and tools) plus a summary, never zero, so a switch never looks free.
-- **No price for the model** (e.g. `claude-opus-5`): it falls back to the plain rule of no downgrade above 80k tokens.
+- **No price for the model** (one released after the price table was read): it falls back to the plain rule of no downgrade above 80k tokens. A price added to the defaults later joins a stored table on its own, unless you cleared that model's price.
 - **Upgrades for quality are never held.**
 
 Practical upshot: on a long, warm, 500k-token conversation, the main model rarely changes, because it rarely pays. The savings there come from compacting and from subagents, which start with fresh context.
@@ -389,6 +394,7 @@ It never claims a number of tasks or tokens remaining. `/quality-router limits` 
 - **`⚠ Degraded`:** a routed model didn't answer, or Claude Code fell back to another model on its own. `/quality-router reset-task` clears the set-aside models.
 - **Phase keeps the same model:** that's deliberate. A decision stays fixed for a whole phase, and short follow-ups ("yes", "go ahead") continue it. A downgrade is also held while the prompt exceeds 80k tokens, because switching would resend it uncached. Start a new phase with a new prompt or `/quality-router reset-task`.
 - **Headless `-p` warns about stdin:** add `< /dev/null`.
+- **"An older copy of the router in another session changed the shared settings":** a session started before this version was installed still runs the old copy, and it saved its stale settings over the shared ones (on Oct 14 one set Economy and turned auto-compact off). This version stamps every settings write, so it can tell, and it puts your settings back at the next turn. If you made that change on purpose, make it again in a newer session. Restarting the older sessions stops it.
 
 ## Development
 

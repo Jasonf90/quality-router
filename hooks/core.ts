@@ -65,6 +65,10 @@ export const EMPTY_HISTORY: History = { decisions: [], requests: [], phases: [] 
 
 export const STORE = {
   prefs: 'prefs',
+  /** The last settings a guarded copy wrote: what an older copy's overwrite is undone to. */
+  prefsGood: 'prefs-good',
+  /** When an older copy's overwrite was undone, and what it had changed. */
+  prefsRestored: 'prefs-restored',
   limits: 'limits',
   experiments: 'experiments',
   ledgerIndex: 'ledger-index',

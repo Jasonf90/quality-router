@@ -114,9 +114,9 @@ import { agentEstimate, recordRun } from './eta'
 import { addReading } from './limits'
 import { type Meter, type Tone, type View, agentRow, agentsMeter, band, barCells, barChars, contextMeter, lifetimeLine, limitMeter, recommendations, savingsMeter, sessionSavings, taskLines, taskMeter, tierBars } from './present'
 import { cacheAwareStep, emptyCacheAware, logSavings } from './savings'
-import { analyzePrompt, analyzeSubagent, assessFromTasks, decide, isFollowUp, isPlanPrompt, raisesTask, strongerAnalysis } from './policy'
+import { analyzePrompt, analyzeSubagent, answerDemands, assessFromTasks, decide, isExecution, isFollowUp, isPlanPrompt, raisesTask, strongerAnalysis } from './policy'
 import { type TtlEvidence, expectedPhaseRequests, resolveTtl, switchPays, ttlEvidence } from './economics'
-import { DEFAULT_PREFS, cacheTtlOf, nextMode, normalizePrefs, parseProjectConfig, routingChanged, shortModel, tierOfModel, tierRank } from './settings'
+import { DEFAULT_PREFS, cacheTtlOf, describePrefsChange, nextMode, normalizePrefs, parseProjectConfig, prefsStamp, routingChanged, shortModel, stampValid, tierOfModel, tierRank } from './settings'
 import {
   MODE_LABEL,
   type Snapshot,
@@ -203,6 +203,7 @@ async function getPrefs($: Engine, canWrite = true): Promise<Prefs> {
  * classifier call still in flight.
  */
 async function setPrefs($: Engine, change: (p: Prefs) => Prefs): Promise<Prefs> {
+  await guardPrefs($)
   const before = await getPrefs($)
   // Settings are shared by every session. The change is applied to what is
   // stored now, not to this session's copy, which another session may have
@@ -213,7 +214,7 @@ async function setPrefs($: Engine, change: (p: Prefs) => Prefs): Promise<Prefs> 
   const latest = stored === undefined ? before : normalizePrefs(raw)
   const after = normalizePrefs(change(latest))
   await update($, prefsAtom, () => after)
-  await $.store.set(STORE.prefs, { ...raw, ...after })
+  await writePrefs($, { ...raw, ...after })
   if (routingChanged(before, after)) {
     await update($, runtimeAtom, rt => ({
       ...rt,
@@ -224,6 +225,54 @@ async function setPrefs($: Engine, change: (p: Prefs) => Prefs): Promise<Prefs> 
     }))
   }
   return after
+}
+
+/** Stores settings stamped, and keeps them as the reference an older copy's overwrite is undone to. */
+async function writePrefs($: Engine, raw: Record<string, unknown>): Promise<void> {
+  const body: Record<string, unknown> = { ...raw }
+  delete body.stamp
+  body.stamp = prefsStamp(body)
+  await $.store.set(STORE.prefs, body)
+  await $.store.set(STORE.prefsGood, body)
+}
+
+/**
+ * Settings are shared, and a session still running an older copy of the
+ * router saves its own stale copy over them: one set Economy and switched
+ * auto-compact off. Every write from this version is stamped and kept as the
+ * reference; stored settings whose stamp does not match came from an older
+ * copy, and the reference is put back, with a notice saying what was undone.
+ */
+async function guardPrefs($: Engine): Promise<void> {
+  const stored = await $.store.get(STORE.prefs)
+  if (stored === undefined || stampValid(stored)) return
+  const raw = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
+  const good = await $.store.get(STORE.prefsGood)
+  if (!good || typeof good !== 'object' || Array.isArray(good) || !stampValid(good)) {
+    // The first run of a guarded copy: what is stored becomes the reference.
+    await writePrefs($, raw)
+    return
+  }
+  const changes = describePrefsChange(normalizePrefs(good), normalizePrefs(raw))
+  await writePrefs($, good as Record<string, unknown>)
+  const restored = normalizePrefs(good)
+  const held = await $.state.get({ plugin: 'quality-router', key: 'prefs' })
+  if (held.version > 0 && held.value) {
+    await update($, prefsAtom, () => restored)
+    if (routingChanged(held.value, restored)) {
+      await update($, runtimeAtom, rt => ({ ...rt, epoch: rt.epoch + 1, phase: rt.phase ? { ...rt.phase, decision: null } : null }))
+    }
+  }
+  if (changes.length === 0) return
+  const at = await $.clock.now()
+  const log = await $.store.get(STORE.prefsRestored)
+  await $.store.set(STORE.prefsRestored, [...(Array.isArray(log) ? log : []), { at, changes }].slice(-20))
+  await notify(
+    $,
+    `Quality Router: an older copy of the router in another session changed the shared settings (${changes.join(', ')}). They were put back. If you made that change on purpose, make it again here. Sessions started before this version was installed still run the old copy; restarting them stops this.`,
+    'warning',
+    20_000,
+  )
 }
 
 function patchRuntime($: Engine, change: (rt: Runtime) => Runtime): Promise<Runtime> {
@@ -417,7 +466,9 @@ async function onSessionStart($: Engine): Promise<void> {
     immediate: true,
   })
   const prefs = await getPrefs($)
-  if ((await $.store.get(STORE.prefs)) === undefined) await $.store.set(STORE.prefs, prefs)
+  if ((await $.store.get(STORE.prefs)) === undefined) await writePrefs($, { ...prefs })
+  await guardPrefs($)
+  await refreshPrefs($)
   await ensureLedger($)
   await ensureLoaded($)
   await refreshStatusLine($)
@@ -453,6 +504,7 @@ async function ensureLoaded($: Engine): Promise<void> {
 
 /** Takes up settings another session changed since this one read them (they are shared). */
 async function refreshPrefs($: Engine): Promise<void> {
+  await guardPrefs($)
   const held = await getPrefs($)
   const stored = await $.store.get(STORE.prefs)
   if (stored === undefined) return
@@ -479,9 +531,19 @@ async function onTurnStart($: Engine, e: { text: string; turnId: string }): Prom
       // a riskier one) raises it; nothing a follow-up says lowers it.
       const prefs = await getPrefs($)
       const current = rt.phase.analysis
-      if (current && e.text.trim().length > 0 && raisesTask(current, asked, prefs.mode)) {
-        const raised = strongerAnalysis(current, asked, prefs.mode)
-        await patchRuntime($, r => (r.phase ? { ...r, phase: { ...r.phase, analysis: raised, decision: null } } : r))
+      let next = current
+      if (next && e.text.trim().length > 0 && raisesTask(next, asked, prefs.mode)) next = strongerAnalysis(next, asked, prefs.mode)
+      // "Yes", "do it", "let's start working the plan": the work is what the
+      // last answer proposed, which these words do not say. When that is high
+      // risk or design work (iCloud sync, a schema deployed to production), the
+      // task runs at what it demands.
+      const proposed = rt.lastAnswer ?? null
+      if (next && proposed && isExecution(e.text) && raisesTask(next, proposed, prefs.mode)) next = strongerAnalysis(next, proposed, prefs.mode)
+      if (next !== current) {
+        const raised = next
+        await patchRuntime($, r => (r.phase ? { ...r, phase: { ...r.phase, analysis: raised, decision: null }, lastAnswer: null } : r))
+      } else if (proposed) {
+        await patchRuntime($, r => ({ ...r, lastAnswer: null }))
       }
       return
     }
@@ -489,6 +551,7 @@ async function onTurnStart($: Engine, e: { text: string; turnId: string }): Prom
   const now = await $.clock.now()
   const ordinal = rt.phase ? rt.phase.ordinal + 1 : 0
   const phase = { ...newPhase(e.turnId, now, digest(e.text), analyzePrompt(e.text), rt.phase ? rt.lastPromptTokens : 0, ordinal), planPrompt: isPlanPrompt(e.text) }
+  if (rt.lastAnswer) await patchRuntime($, r => ({ ...r, lastAnswer: null }))
   if (rt.phase) await closePhase($, rt)
   pendingText.clear()
   if (e.text.length > 0) pendingText.set(phase.id, e.text.slice(0, 4000))
@@ -1114,7 +1177,7 @@ async function trackActivity($: Engine, e: ToolCallInput, tool: string, ran: Too
 
 // --- turn end, limits, review, session end --------------------------------------------
 
-async function onTurnComplete($: Engine, e: { agentId?: string; turnId: string; reason?: string; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number } }): Promise<void> {
+async function onTurnComplete($: Engine, e: { agentId?: string; turnId: string; reason?: string; answer?: string; usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number } }): Promise<void> {
   if (e.agentId) {
     const id = e.agentId
     const at = await $.clock.now()
@@ -1131,6 +1194,9 @@ async function onTurnComplete($: Engine, e: { agentId?: string; turnId: string; 
     }
     return
   }
+  // What the answer proposes, kept as a verdict only (never the text), for a reply that sets it going.
+  const demands = answerDemands(typeof e.answer === 'string' ? e.answer : '')
+  await patchRuntime($, r => (r.lastAnswer === demands ? r : { ...r, lastAnswer: demands }))
   const summed = turnTotals.get(e.turnId)
   turnTotals.delete(e.turnId)
   if (summed && e.usage) {
@@ -1471,6 +1537,10 @@ async function runTip($: Engine, action: string | null): Promise<void> {
   else if (action === 'new-session') text = await prepareNewSession($)
   else if (action === 'economy') text = await setMode($, 'economy')
   else if (action === 'enable') text = await setRouterState($, 'on')
+  else if (action === 'smart-compact') {
+    await setPrefs($, p => ({ ...p, autoCompactSmart: 'on' }))
+    text = 'Smart auto-compact on: compacts when a piece of work is finished, and mid-task only past the ceiling.'
+  }
   if (text) await notify($, text, action === 'compact' ? 'info' : 'success')
 }
 
@@ -1484,12 +1554,13 @@ const TIP_LABEL: Record<string, string> = {
   'new-session': 'Start fresh',
   economy: 'Economy mode',
   enable: 'Turn on',
+  'smart-compact': 'Smart compaction',
 }
 
 function tipsText(v: View): string {
   const tips = recommendations(v)
   if (tips.length === 0) return 'No recommendations right now: context, cache and pace look fine.'
-  return tips.map(t => `${t.severity === 'urgent' ? '!!' : t.severity === 'warn' ? '!' : '-'} ${t.title}\n  ${t.detail}${t.action ? `\n  (${TIP_LABEL[t.action]}: ${t.action === 'compact' ? '/quality-router compact' : t.action === 'new-session' ? '/clear' : t.action === 'economy' ? '/quality-router mode economy' : '/quality-router on'})` : ''}`).join('\n')
+  return tips.map(t => `${t.severity === 'urgent' ? '!!' : t.severity === 'warn' ? '!' : '-'} ${t.title}\n  ${t.detail}${t.action ? `\n  (${TIP_LABEL[t.action]}: ${t.action === 'compact' ? '/quality-router compact' : t.action === 'new-session' ? '/clear' : t.action === 'economy' ? '/quality-router mode economy' : t.action === 'smart-compact' ? '/quality-router autocompact smart' : '/quality-router on'})` : ''}`).join('\n')
 }
 
 function savingsText(v: View): string {

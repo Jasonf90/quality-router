@@ -37,6 +37,15 @@ export type AdviceInput = {
   planPrompt?: boolean
   /** The current task list is complete. */
   tasksDone?: boolean
+  /** Smart auto-compact's setting; absent when not known. */
+  autoCompactSmart?: 'off' | 'watch' | 'on'
+  /**
+   * The session runs a model that costs more than the router's model for the
+   * same tier (Opus 5 where the strong tier is Opus 5.5): list prices per
+   * million tokens, for the tip that says so. The router keeps a model the
+   * person chose within its tier, so only they can switch.
+   */
+  pricierModel?: { model: string; cheaper: string; readUsd: number; cheaperReadUsd: number; cheaperWriteUsd: number } | null
 }
 
 const SEVERITY: Record<Recommendation['severity'], number> = { urgent: 0, warn: 1, info: 2 }
@@ -168,12 +177,31 @@ export function recommend(i: AdviceInput): Recommendation[] {
 
   const w = i.weekly
   if (w && w.status === 'projected' && w.etaMs !== null) {
+    // Smart compaction first: on recorded sessions compactions cost about
+    // a seventh of what they saved, with no sign of lost context, and it does not
+    // change which model does the work. Economy does, and trades quality.
+    const smartOff = i.autoCompactSmart !== undefined && i.autoCompactSmart !== 'on'
     out.push({
       id: 'weekly-pace',
       severity: 'warn',
       title: `Weekly limit projected ${formatWhen(w.etaMs)} (estimate)`,
-      detail: `At the recent pace (${w.percentUsed}% used) the weekly window would fill before it resets. Economy mode and fresher sessions slow the pace.`,
-      action: i.mode === 'economy' ? null : 'economy',
+      detail: smartOff
+        ? `At the recent pace (${w.percentUsed}% used) the weekly window would fill before it resets. Smart auto-compact is off: on recorded long sessions its compactions cost about a seventh of what they saved, and it leaves the choice of model alone.`
+        : `At the recent pace (${w.percentUsed}% used) the weekly window would fill before it resets. Fresher sessions slow the pace; Economy mode moves more work to cheaper models, which trades some quality.`,
+      action: smartOff ? 'smart-compact' : i.mode === 'economy' ? null : 'economy',
+    })
+  }
+
+  const pm = i.pricierModel
+  if (pm && i.promptTokens > 0) {
+    const usd = (n: number) => (n < 0.995 ? `$${n.toFixed(2)}` : `$${n.toFixed(1)}`)
+    const k = Math.round(i.promptTokens / 1000)
+    out.push({
+      id: 'pricier-model',
+      severity: 'info',
+      title: `This session runs ${pm.model}; ${pm.cheaper} costs less per request`,
+      detail: `At ${k}k tokens each request reads about ${usd((i.promptTokens * pm.readUsd) / 1e6)} from the cache on ${pm.model} against ${usd((i.promptTokens * pm.cheaperReadUsd) / 1e6)} on ${pm.cheaper} (list prices). Switching with /model ${pm.cheaper} re-caches the conversation once, about ${usd((i.promptTokens * pm.cheaperWriteUsd) / 1e6)}. The router keeps the model you chose for its tier, so only you can switch.`,
+      action: null,
     })
   }
 

@@ -6,6 +6,8 @@ import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { ModelCompleteInput, ModelCompleteResult, On, RenderElement, TurnStepChunk, TurnStepResult } from 'claude-code'
 
+import { prefsStamp } from '../hooks/settings'
+
 export const SESSION_MODEL = 'claude-opus-5-5'
 export const T0 = Date.UTC(2026, 9, 9, 12, 0, 0)
 
@@ -206,10 +208,10 @@ export async function step($: Engine, args: { turnId: string; index?: number; mo
 }
 
 /** One whole main-loop turn: start, `steps` requests, completion. */
-export async function turn($: Engine, text: string, turnId: string, steps = 1): Promise<void> {
+export async function turn($: Engine, text: string, turnId: string, steps = 1, answer = 'done'): Promise<void> {
   await $.turn.start({ text, turnId })
   for (let i = 0; i < steps; i++) await step($, { turnId, index: i })
-  await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId, reason: 'answer' } as never)
+  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId, reason: 'answer' } as never)
 }
 
 export async function bash($: Engine, w: World, command: string, reply: ToolReply, agentId?: string): Promise<void> {
@@ -224,6 +226,15 @@ export async function edit($: Engine, w: World, path: string, agentId?: string):
 
 export function prefsInStore(w: World): Record<string, unknown> {
   return (w.store.get('prefs') ?? {}) as Record<string, unknown>
+}
+
+/** Another session running this version changes the shared settings: a stamped write, kept as the reference. */
+export function otherSessionSets(w: World, patch: Record<string, unknown>): void {
+  const body: Record<string, unknown> = { ...prefsInStore(w), ...patch }
+  delete body.stamp
+  body.stamp = prefsStamp(body)
+  w.store.set('prefs', body)
+  w.store.set('prefs-good', body)
 }
 
 export const BAND_PROPS = {

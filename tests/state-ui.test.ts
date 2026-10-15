@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { HELP, parseCommand, tokenize } from '../hooks/commands'
-import { BAND_PROPS, SESSION_MODEL, cmd, install, prefsInStore, start, step, turn, SLOW } from './harness'
+import { BAND_PROPS, SESSION_MODEL, cmd, install, otherSessionSets, prefsInStore, start, step, turn, SLOW } from './harness'
 
 const BAND = { plugin: 'quality-router', component: 'AbovePrompt', props: BAND_PROPS } as const
 const SURFACES = ['terminal', 'desktop'] as const
@@ -238,7 +238,7 @@ describe('settings shared by several sessions (mock integration)', () => {
     await start($)
     expect(await cmd($, 'status')).toContain('auto-compact at 300k')
     // Another session turns auto-compact down to 250k in the shared store.
-    w.store.set('prefs', { ...(w.store.get('prefs') as object), autoCompactTokens: 250_000 })
+    otherSessionSets(w, { autoCompactTokens: 250_000 })
     await cmd($, 'mode balanced')
     expect(prefsInStore(w)).toMatchObject({ mode: 'balanced', autoCompactTokens: 250_000 })
   })
@@ -246,8 +246,47 @@ describe('settings shared by several sessions (mock integration)', () => {
   test('each turn takes up settings another session changed', SLOW, async ($, on) => {
     const w = install(on, { store: { prefs: { version: 2, state: 'on' } } })
     await start($)
-    w.store.set('prefs', { ...(w.store.get('prefs') as object), mode: 'economy' })
+    otherSessionSets(w, { mode: 'economy' })
     await turn($, 'Fix the typo in the onboarding title', 't1')
     expect(await cmd($, 'status')).toContain('Economy')
+  })
+
+  test('an older copy that saves its stale settings over them (dropping the stamp) is undone at the next turn, with a notice', SLOW, async ($, on) => {
+    const w = install(on, { store: { prefs: { version: 2, state: 'on', mode: 'quality-first', autoCompactSmart: 'on' } } })
+    await start($)
+    expect(prefsInStore(w).stamp).toEqual(expect.any(String))
+    // What a copy from before 0.8.1 writes: its whole in-memory object, stale, no new fields, no stamp.
+    w.store.set('prefs', { version: 2, state: 'on', mode: 'economy', autoCompactTokens: null })
+    await turn($, 'Fix the typo in the onboarding title', 't1')
+    expect(prefsInStore(w)).toMatchObject({ mode: 'quality-first', autoCompactSmart: 'on' })
+    expect(await cmd($, 'status')).toContain('Quality-first')
+    expect(w.toasts.some(t => /older copy of the router.*mode quality-first → economy.*auto-compact smart → off.*put back/.test(t))).toBe(true)
+    expect((w.store.get('prefs-restored') as unknown[]).length).toBe(1)
+  })
+
+  test('an older copy that keeps the stored fields but changes one (a stale stamp) is undone too', SLOW, async ($, on) => {
+    const w = install(on, { store: { prefs: { version: 2, state: 'on', mode: 'quality-first' } } })
+    await start($)
+    // What 0.8.1-0.8.5 write: the stored object (stamp included) with their own fields over it.
+    w.store.set('prefs', { ...prefsInStore(w), mode: 'balanced' })
+    await turn($, 'Fix the typo in the onboarding title', 't1')
+    expect(prefsInStore(w).mode).toBe('quality-first')
+  })
+
+  test('the first run of a guarded copy adopts what is stored, silently', SLOW, async ($, on) => {
+    const w = install(on, { store: { prefs: { version: 2, state: 'on', mode: 'economy' } } })
+    await start($)
+    await turn($, 'Fix the typo in the onboarding title', 't1')
+    expect(prefsInStore(w).mode).toBe('economy')
+    expect(w.toasts.some(t => /older copy/.test(t))).toBe(false)
+  })
+
+  test('a change made here is stamped, so other guarded sessions take it up instead of undoing it', SLOW, async ($, on) => {
+    const w = install(on, { store: { prefs: { version: 2, state: 'on' } } })
+    await start($)
+    await cmd($, 'mode balanced')
+    await turn($, 'Fix the typo in the onboarding title', 't1')
+    expect(prefsInStore(w).mode).toBe('balanced')
+    expect(w.store.get('prefs-good')).toEqual(prefsInStore(w))
   })
 })

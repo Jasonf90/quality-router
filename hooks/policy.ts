@@ -32,6 +32,9 @@ const HIGH_RISK: Rule[] = [
   { re: /\b(production (database|db|data|deploy\w*|release)|prod (db|database|deploy|data)|release signing|code signing|provisioning profiles?|deploy to prod\w*)\b/, signal: 'production' },
   { re: /\b(biometric\w*|face ?id|touch ?id|healthkit|health data|medical records?|background location|location tracking)\b/, signal: 'sensitive data' },
   { re: /\b(submit\w* (it |this |the app |the build |the update |build \d+ |\d+ )?(for|to) (app store |apple |google play |play store )?review|app store connect|testflight|(release|publish|ship|upload)\w* (it |the app |the build |the update |a build |build \d+ )?(to|on) (the )?(app store|play store|testflight|production)|phased release)\b/, signal: 'store release' },
+  // A sync bug reaches every device a person owns, and a CloudKit schema
+  // deployed to production cannot be taken back.
+  { re: /\b(icloud (sync\w*|kit|key[- ]?value( store)?|containers?|backups?)|cloudkit|ck(record|share|container|database|syncengine|subscription)s?|nspersistentcloudkitcontainer|nsubiquitouskeyvaluestore|(cross|multi)[- ]device (sync\w*|continuity|data|state)|sync\w* (across|between|to|with) (the |all |other |your |my |their |our |every )*(devices|platforms)|(data|device|cloud|two[- ]way|bidirectional|offline) sync\w*|sync conflicts?|conflict resolution|production schema|deploy\w* (the )?(cloudkit |production )?schema)\b/, signal: 'data sync' },
 ]
 
 /** An auth-flavoured task that only touches presentation is not high risk. */
@@ -162,7 +165,48 @@ export function raisesTask(a: Analysis, b: Analysis, mode: RouterMode): boolean 
   return tierRank(applyMode(b, mode).tier) > tierRank(applyMode(a, mode).tier) || riskRank(b.risk) > riskRank(a.risk)
 }
 
-const PLAN_PROMPT = /^(please\s+)?(let'?s\s+)?(?<verb>(start|begin|do|run|execute|continue( with)?|move (on )?to|go (on )?to|proceed (to|with)|on to|now)\s+)?(the\s+)?(?<next>next\s+)?(phase|step|stage|milestone|part|sprint)(\s+(?<num>\d+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten))?\s*[.!]?\s*$/i
+/** A reply that sets the proposed work going, not one that asks about it. */
+const EXECUTES = /\b(start\w*|begin|implement\w*|build|do|work(ing)?|execute|proceed|go ahead|continue|carry on|keep going|apply|finish|complete|ship|fix|set (it |them |that )?up|make (it|that|them|those|these|the changes?))\b/
+
+/**
+ * Whether a follow-up sets in motion the work Claude's last answer proposed:
+ * "yes", "let's start working the plan", "continue with what you recommend",
+ * "do it for me". "What's next?" asks about it and is not.
+ */
+export function isExecution(text: string): boolean {
+  const t = text.trim().toLowerCase()
+  if (t.length === 0 || t.startsWith('<task-notification')) return false
+  if (isContinuation(t)) return true
+  return EXECUTES.test(t) && !/^(what|why|how|which|when|where|who|is|are|does|did|can|could|should)\b/.test(t)
+}
+
+/** How much of Claude's answer is read: its opening states the subject, its end what it proposes. */
+const ANSWER_HEAD = 1500
+const ANSWER_TAIL = 2500
+
+/**
+ * What the work Claude's last answer proposed demands, when that is more than
+ * its words would be judged as on their own: high risk (it plans iCloud sync,
+ * a payment flow, a store submission) or design work. Null otherwise, and for
+ * an empty answer. Only this verdict is kept, never the answer's text.
+ */
+export function answerDemands(answer: string): Analysis | null {
+  const text = answer.length <= ANSWER_HEAD + ANSWER_TAIL ? answer : `${answer.slice(0, ANSWER_HEAD)}\n${answer.slice(-ANSWER_TAIL)}`
+  if (text.trim().length === 0) return null
+  const a = analyzePrompt(text)
+  // Design work, not the word "plan": answers lay out plans all the time.
+  const design = hits(ARCHITECTURE, text.toLowerCase()).filter(s => s !== 'planning')
+  if (a.risk !== 'high' && design.length === 0) return null
+  return {
+    ...a,
+    category: a.risk === 'high' ? a.category : 'architecture',
+    tier: 'strong',
+    confidence: Math.max(a.confidence, 0.8),
+    signals: [...new Set(['proposed in the last answer', ...a.signals])].slice(0, 8),
+  }
+}
+
+const PLAN_PROMPT =/^(please\s+)?(let'?s\s+)?(?<verb>(start|begin|do|run|execute|continue( with)?|move (on )?to|go (on )?to|proceed (to|with)|on to|now)\s+)?(the\s+)?(?<next>next\s+)?(phase|step|stage|milestone|part|sprint)(\s+(?<num>\d+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten))?\s*[.!]?\s*$/i
 
 /**
  * A prompt that starts a step of an earlier plan: "start phase 3", "next

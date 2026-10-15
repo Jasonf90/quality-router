@@ -6,7 +6,7 @@ import type { ExperimentArm, RequestRecord, Tokens } from '../types'
 import { addRequest, allTokens, emptyLedger, fromUsage, restoreLedger } from '../hooks/accounting'
 import { emptyArm } from '../hooks/core'
 import { compareExperiment, findPrice, priceBucket, sameVolumeEstimate, cacheAwareHeadline, cacheAwareStep, emptyCacheAware, lifetime } from '../hooks/savings'
-import { DEFAULT_PREFS, normalizePrefs } from '../hooks/settings'
+import { DEFAULT_PREFS, DEFAULT_PRICING, normalizePrefs } from '../hooks/settings'
 import { usageText } from '../hooks/view'
 import { EMPTY_HISTORY, EMPTY_PROJECT, EMPTY_RUNTIME } from '../hooks/core'
 import { emptyValidation } from '../hooks/escalation'
@@ -131,7 +131,8 @@ describe('same-volume estimate (pure)', () => {
   test('no price: no estimate, or a partial one that names what is missing', () => {
     let l = emptyLedger('s', 0)
     l = addRequest(l, rec('a', { observedModel: 'claude-mystery-1', usage: T(1000, 10) })).ledger
-    expect(sameVolumeEstimate(l, normalizePrefs({ pricing: {} }), 'claude-opus-5-5').status).toBe('unavailable')
+    const none = normalizePrefs({ pricing: {}, pricingCleared: Object.keys(DEFAULT_PRICING) })
+    expect(sameVolumeEstimate(l, none, 'claude-opus-5-5').status).toBe('unavailable')
     const partial = sameVolumeEstimate(l, prefs, 'claude-opus-5-5')
     expect(partial.status).toBe('partial')
     expect(partial.missingPrices).toEqual(['claude-mystery-1'])

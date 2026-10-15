@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Prefs } from '../types'
 import { EMPTY_RUNTIME, planStep } from '../hooks/core'
-import { analyzePrompt, analyzeSubagent, applyMode, decide, isContinuation, isFollowUp, raisesTask } from '../hooks/policy'
+import { analyzePrompt, analyzeSubagent, answerDemands, applyMode, decide, isContinuation, isExecution, isFollowUp, raisesTask } from '../hooks/policy'
 import { DEFAULT_PREFS, normalizePrefs } from '../hooks/settings'
 
 const prefs = (over: Partial<Prefs> = {}): Prefs => ({ ...DEFAULT_PREFS, ...over })
@@ -203,5 +203,46 @@ describe('asks the rules used to under-rate (from an audit of real prompts, para
   })
   test('merging and rewriting documents is writing, not a look-up', () => {
     expect(route('can we merge the remaining plan with the roadmap in decisions.md? recreate them').tier).not.toBe('cheap')
+  })
+})
+
+describe('learned from the sessions of Oct 12-14 (paraphrased)', () => {
+  test('data that syncs across a person\'s devices is high risk: a bug reaches every device, a production schema stays', () => {
+    for (const t of [
+      'can we move the icloud sync and cross device continuity to the front of our plan?',
+      'add CloudKit sync for routines',
+      'let people choose whether business rhythms sync to their other devices',
+      'set up conflict resolution for edits made offline on two devices',
+      'deploy the schema to production in the CloudKit console',
+    ]) {
+      expect(`${t}: ${analyzePrompt(t).risk}`).toBe(`${t}: high`)
+      expect(`${t}: ${route(t).tier}`).toBe(`${t}: strong`)
+    }
+    for (const t of ['sync my branch with main', 'add a lip sync animation to the mascot', 'rename the SyncButton label'])
+      expect(`${t}: ${analyzePrompt(t).risk}`).toBe(`${t}: low`)
+  })
+
+  test('a reply that sets the proposed work going is an execution; one that asks about it is not', () => {
+    for (const t of ['Yes', "Let's start working the plan", 'Continue with all that is recommended', 'Do it for me', 'go ahead', 'complete for me'])
+      expect(`${t}: ${isExecution(t)}`).toBe(`${t}: true`)
+    for (const t of ["what's next?", 'whats next', 'Is it building it', 'why did that fail?'])
+      expect(`${t}: ${isExecution(t)}`).toBe(`${t}: false`)
+  })
+
+  test('an answer proposing high-risk or design work raises the reply that starts it; an ordinary plan does not', () => {
+    const risky = answerDemands('Here is the plan.\n1. Move routines to CloudKit with NSPersistentCloudKitContainer.\n2. Handle sync conflicts.\nShall I start?')
+    expect(risky?.tier).toBe('strong')
+    expect(risky?.signals).toContain('data sync')
+    const plain = answerDemands('Next: tidy the settings copy and add a unit test for the formatter. We also plan to look at spacing.')
+    expect(plain).toBe(null)
+    expect(answerDemands('')).toBe(null)
+    const question = analyzePrompt('what should we do next?')
+    expect(raisesTask(question, risky as NonNullable<typeof risky>, 'quality-first')).toBe(true)
+  })
+
+  test('a long answer is read at its opening and its end, where the proposal sits', () => {
+    const filler = 'Ran the sweep and checked each screen. '.repeat(400)
+    expect(answerDemands(`Done.\n${filler}\nNext I can submit build 42 to App Store review. Want me to?`)?.signals).toContain('store release')
+    expect(answerDemands(`Done.\n${filler.slice(0, 3000)} payments ${filler}\nAll checks pass.`)).toBe(null)
   })
 })

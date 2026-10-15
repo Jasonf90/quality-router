@@ -80,6 +80,8 @@ export type Prefs = {
   downgradeContextLimit: number
   maxEscalationsPerPhase: number
   pricing: Record<string, ModelPrice>
+  /** Models whose default price the person cleared: a default does not come back for them. */
+  pricingCleared?: string[]
   /** Cache-write TTL assumed when pricing cache writes. */
   /** The prompt cache's lifetime: 'auto' infers it from what requests read after idle gaps (1h until there is evidence of 5m). */
   cacheTtl: '5m' | '1h' | 'auto'
@@ -255,6 +257,13 @@ export type Runtime = {
   turnCommitted?: boolean
   /** The smallest main-loop prompt seen this session: what every request carries (system prompt, tools) before any conversation. */
   basePrompt?: number
+  /**
+   * What the work Claude's last answer proposed demands, when that is high
+   * risk or design work (policy.answerDemands). Only this verdict is kept,
+   * never the answer. A reply that sets the work going ("yes", "do it",
+   * "start working the plan") is raised to it.
+   */
+  lastAnswer?: Analysis | null
 }
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -487,7 +496,7 @@ export type Recommendation = {
   severity: 'info' | 'warn' | 'urgent'
   title: string
   detail: string
-  action: 'compact' | 'new-session' | 'economy' | 'enable' | null
+  action: 'compact' | 'new-session' | 'economy' | 'enable' | 'smart-compact' | null
 }
 
 /** One session's estimate, kept so savings can be summed across sessions. */

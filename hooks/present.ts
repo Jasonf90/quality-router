@@ -237,6 +237,18 @@ export function agentRow(a: Activity, g: AgentActivity, now: number, stats: Agen
   }
 }
 
+/** The session's own model, when the router's model for the same tier costs less to read from the cache. */
+function pricierModel(v: View): { model: string; cheaper: string; readUsd: number; cheaperReadUsd: number; cheaperWriteUsd: number } | null {
+  const model = v.rt.sessionModel
+  const tier = tierOfModel(model, v.prefs)
+  if (!model || !tier) return null
+  const cheaper = v.prefs.models[tier]
+  const a = v.prefs.pricing[model]
+  const b = v.prefs.pricing[cheaper]
+  if (cheaper === model || !a || !b || a.cacheRead <= b.cacheRead * 1.2 || a.output < b.output) return null
+  return { model, cheaper, readUsd: a.cacheRead, cheaperReadUsd: b.cacheRead, cheaperWriteUsd: cacheTtlOf(v.prefs) === '1h' ? b.cacheWrite1h : b.cacheWrite5m }
+}
+
 export function recommendations(v: View): Recommendation[] {
   const rt = v.rt
   const phase = rt.phase
@@ -261,6 +273,8 @@ export function recommendations(v: View): Recommendation[] {
     potential: potential ? { usd: potential.usd, percent: potential.percent } : null,
     dismissed,
     planPrompt: phase?.planPrompt ?? false,
+    autoCompactSmart: v.prefs.autoCompactSmart,
+    pricierModel: pricierModel(v),
     tasksDone: (() => {
       const p = progress(taskList(v.activity, MAIN))
       return p !== null && p.done === p.total

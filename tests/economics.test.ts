@@ -4,8 +4,8 @@ import { NO_TTL_EVIDENCE, expectedPhaseRequests, resolveTtl, switchPays, ttlEvid
 import { recommend } from '../hooks/advisor'
 import { chooseEffort } from '../hooks/effort'
 import { analyzePrompt, assessFromTasks, isPlanPrompt } from '../hooks/policy'
-import { DEFAULT_PREFS, normalizePrefs } from '../hooks/settings'
-import { SLOW, SPAWN, cmd, install, start, step, tool } from './harness'
+import { DEFAULT_PREFS, DEFAULT_PRICING, normalizePrefs } from '../hooks/settings'
+import { SLOW, SPAWN, cmd, install, start, step, tool, turn } from './harness'
 
 const base = {
   prefs: DEFAULT_PREFS,
@@ -56,8 +56,8 @@ describe('switching economics (pure)', () => {
   })
 
   test('no price for a model: no verdict (the plain rule applies)', () => {
-    expect(switchPays({ ...base, fromModel: 'claude-opus-5' }).pays).toBe(null)
-    expect(switchPays({ ...base, prefs: normalizePrefs({ pricing: {} }) }).reason).toBe('no price for claude-opus-5-5')
+    expect(switchPays({ ...base, fromModel: 'claude-mystery-1' }).pays).toBe(null)
+    expect(switchPays({ ...base, prefs: normalizePrefs({ pricing: {}, pricingCleared: Object.keys(DEFAULT_PRICING) }) }).reason).toBe('no price for claude-opus-5-5')
   })
 
   test('expected phase length: this session\'s median once three phases finished', () => {
@@ -172,5 +172,41 @@ describe('in the session (mock integration)', () => {
     await step($, { turnId: 'wa', agentId: id })
     await step($, { turnId: 'wa', agentId: id, index: 1 })
     expect(w.sent.map(x => x.model)).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5'])
+  })
+})
+
+describe('prices added after the stored table was written', () => {
+  test('Opus 5 is priced from the official page, joins an older stored table, and stays out once cleared', () => {
+    const older = normalizePrefs({ pricing: { 'claude-opus-5-5': DEFAULT_PRICING['claude-opus-5-5'] } })
+    expect(older.pricing['claude-opus-5']).toMatchObject({ input: 5, cacheWrite5m: 6.25, cacheWrite1h: 10, cacheRead: 0.5, output: 25 })
+    const cleared = normalizePrefs({ pricing: { 'claude-opus-5-5': DEFAULT_PRICING['claude-opus-5-5'] }, pricingCleared: ['claude-opus-5'] })
+    expect(cleared.pricing['claude-opus-5']).toBe(undefined)
+  })
+})
+
+describe('a reply that starts what the last answer proposed (mock integration)', () => {
+  const RISKY = 'Plan: move routines to CloudKit so they sync across devices, then handle sync conflicts. Shall I start?'
+  const PLAIN = 'Plan: tidy the settings copy and add a unit test for the date formatter. Shall I start?'
+
+  test('"let\'s start working the plan" after a plan for iCloud sync runs on the strong tier', SLOW, async ($, on) => {
+    const w = install(on)
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'what should we work on next?', 't1', 1, RISKY)
+    expect(w.sent[0]?.model).toBe('claude-sonnet-5-5')
+    await turn($, "Let's start working the plan", 't2')
+    expect(w.sent[1]?.model).toBe('claude-opus-5-5')
+  })
+
+  test('after an ordinary plan, or when the reply only asks about it, the task keeps its tier', SLOW, async ($, on) => {
+    const w = install(on)
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'what should we work on next?', 't1', 1, PLAIN)
+    await turn($, "Let's start working the plan", 't2')
+    expect(w.sent[1]?.model).toBe('claude-sonnet-5-5')
+    await turn($, 'what should we work on next?', 't3', 1, RISKY)
+    await turn($, "what's next?", 't4')
+    expect(w.sent[3]?.model).toBe('claude-sonnet-5-5')
   })
 })

@@ -86,3 +86,23 @@ describe('the compaction window tip', () => {
     expect(ids({ promptTokens: 300_000, contextWindow: 1_000_000 })).not.toContain('compact-window')
   })
 })
+
+describe('learned from the sessions of Oct 12-14', () => {
+  const weekly: Projection = { kind: 'seven_day', percentUsed: 94, resetsAt: null, status: 'projected', etaMs: Date.UTC(2026, 9, 15, 18), primary: null, alternative: null, note: '' }
+  test('near the weekly limit with smart compaction off, the tip offers smart compaction before Economy', () => {
+    const off = recommend({ ...BASE, weekly, autoCompactSmart: 'off' }).find(r => r.id === 'weekly-pace')
+    expect(off?.action).toBe('smart-compact')
+    expect(off?.detail).toContain('a seventh of what they saved')
+    const on = recommend({ ...BASE, weekly, autoCompactSmart: 'on' }).find(r => r.id === 'weekly-pace')
+    expect(on?.action).toBe('economy')
+    expect(on?.detail).toContain('trades some quality')
+  })
+  test('a session on a model that costs more than the tier\'s own says what switching would save, and acts on nothing', () => {
+    const pricierModel = { model: 'claude-opus-5', cheaper: 'claude-opus-5-5', readUsd: 0.5, cheaperReadUsd: 0.2, cheaperWriteUsd: 8 }
+    const tip = recommend({ ...BASE, promptTokens: 200_000, pricierModel }).find(r => r.id === 'pricier-model')
+    expect(tip?.action).toBe(null)
+    expect(tip?.detail).toContain('$0.10 from the cache on claude-opus-5 against $0.04 on claude-opus-5-5')
+    expect(tip?.detail).toContain('/model claude-opus-5-5')
+    expect(ids({ promptTokens: 200_000, pricierModel: null })).not.toContain('pricier-model')
+  })
+})

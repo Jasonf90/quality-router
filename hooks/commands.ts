@@ -217,7 +217,7 @@ export function parseCommand(args: string): Action {
         return prefs(p => {
           const pricing = { ...p.pricing }
           delete pricing[model]
-          return { ...p, pricing }
+          return { ...p, pricing, pricingCleared: [...new Set([...(p.pricingCleared ?? []), model])] }
         }, `price cleared for ${model}`)
       }
       const model = a1
@@ -230,7 +230,7 @@ export function parseCommand(args: string): Action {
       })
       if (!price) return { kind: 'error', message: 'price needs input, output, write5m, write1h, read (USD per million tokens), source and date=YYYY-MM-DD' }
       const p2: ModelPrice = price
-      return prefs(p => ({ ...p, pricing: { ...p.pricing, [model]: p2 } }), `price set for ${model} (${p2.source}, ${p2.asOf})`)
+      return prefs(p => ({ ...p, pricing: { ...p.pricing, [model]: p2 }, pricingCleared: (p.pricingCleared ?? []).filter(m => m !== model) }), `price set for ${model} (${p2.source}, ${p2.asOf})`)
     }
     case 'baseline': {
       if (a1 === 'session') return prefs(p => ({ ...p, baselineModel: null }), 'baseline: the session model')

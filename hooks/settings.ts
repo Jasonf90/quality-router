@@ -42,6 +42,11 @@ export const DEFAULT_PRICING: Record<string, ModelPrice> = {
     over100k: { input: 0.5, cacheWrite5m: 0.625, cacheWrite1h: 1, cacheRead: 0.05, output: 2.5 },
     source: PRICING_SOURCE, asOf: PRICING_AS_OF,
   },
+  // Sessions started before Opus 5.5 still run on it.
+  'claude-opus-5': {
+    input: 5, cacheWrite5m: 6.25, cacheWrite1h: 10, cacheRead: 0.5, output: 25,
+    source: PRICING_SOURCE, asOf: '2026-10-14',
+  },
 }
 
 /**
@@ -74,6 +79,7 @@ export const DEFAULT_PREFS: Prefs = {
   downgradeContextLimit: 80_000,
   maxEscalationsPerPhase: 2,
   pricing: DEFAULT_PRICING,
+  pricingCleared: [],
   cacheTtl: 'auto',
   baselineModel: null,
   ui: { ascii: false, showReason: true, showLimits: true, statusLine: false, band: 'full' },
@@ -191,7 +197,11 @@ export function normalizePrefs(raw: unknown): Prefs {
   const classifier = obj(r.classifier)
   const ui = obj(r.ui)
   const pricing: Record<string, ModelPrice> = {}
-  const rawPricing = r.pricing === undefined ? DEFAULT_PRICING : obj(r.pricing)
+  // A default added after the stored table was written joins it, unless the
+  // person cleared that model's price.
+  const cleared = Array.isArray(r.pricingCleared) ? r.pricingCleared.filter(isModelId).slice(0, 40) : []
+  const defaults = Object.fromEntries(Object.entries(DEFAULT_PRICING).filter(([m]) => !cleared.includes(m)))
+  const rawPricing = r.pricing === undefined ? DEFAULT_PRICING : { ...defaults, ...obj(r.pricing) }
   for (const [model, value] of Object.entries(rawPricing).slice(0, 40)) {
     const price = normalizePrice(value)
     if (price && isModelId(model)) pricing[model] = price
@@ -232,6 +242,7 @@ export function normalizePrefs(raw: unknown): Prefs {
     downgradeContextLimit: num(r.downgradeContextLimit, 80_000, 0, 2_000_000),
     maxEscalationsPerPhase: num(r.maxEscalationsPerPhase, 2, 0, 2),
     pricing,
+    pricingCleared: cleared,
     cacheTtl: r.cacheTtl === '1h' ? '1h' : r.cacheTtl === '5m' && Number(r.version) >= 2 ? '5m' : 'auto',
     baselineModel: isModelId(r.baselineModel) ? r.baselineModel : null,
     ui: {
@@ -242,6 +253,56 @@ export function normalizePrefs(raw: unknown): Prefs {
       band: ui.band === 'compact' || ui.band === 'off' ? ui.band : 'full',
     },
   }
+}
+
+/**
+ * The stamp a guarded copy of the router writes beside the settings: a hash
+ * of everything else stored with them. An older copy saves the settings
+ * without recomputing it (dropping it, or keeping a stale one), so a stamp
+ * that does not match says the last write came from an older copy. Fixed for
+ * every version: FNV-1a over JSON with keys sorted, the `stamp` key left out.
+ */
+export function prefsStamp(raw: unknown): string {
+  const canon = (v: unknown): string => {
+    if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`
+    if (v && typeof v === 'object') {
+      return `{${Object.keys(v as Record<string, unknown>)
+        .filter(k => k !== 'stamp' && (v as Record<string, unknown>)[k] !== undefined)
+        .sort()
+        .map(k => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`)
+        .join(',')}}`
+    }
+    return JSON.stringify(v) ?? 'null'
+  }
+  let h = 0x811c9dc5
+  for (const ch of canon(raw)) {
+    h ^= ch.charCodeAt(0)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** Whether stored settings carry a stamp that matches them. */
+export function stampValid(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  const stamp = (raw as Record<string, unknown>).stamp
+  return typeof stamp === 'string' && stamp === prefsStamp(raw)
+}
+
+/**
+ * What an unguarded write changed, in the person's terms: the settings they
+ * set themselves (routing state, mode, auto-compact, override, floor).
+ */
+export function describePrefsChange(from: Prefs, to: Prefs): string[] {
+  const out: string[] = []
+  const compact = (p: Prefs) => (p.autoCompactSmart === 'on' ? 'smart' : p.autoCompactSmart === 'watch' ? 'watch' : p.autoCompactTokens ? `at ${Math.round(p.autoCompactTokens / 1000)}k` : 'off')
+  const override = (p: Prefs) => (p.override.kind === 'auto' ? 'automatic' : p.override.kind === 'tier' ? p.override.tier : p.override.model)
+  if (from.state !== to.state) out.push(`router ${from.state} → ${to.state}`)
+  if (from.mode !== to.mode) out.push(`mode ${from.mode} → ${to.mode}`)
+  if (compact(from) !== compact(to)) out.push(`auto-compact ${compact(from)} → ${compact(to)}`)
+  if (override(from) !== override(to)) out.push(`model ${override(from)} → ${override(to)}`)
+  if (from.floor !== to.floor) out.push(`floor ${from.floor ?? 'none'} → ${to.floor ?? 'none'}`)
+  return out
 }
 
 /** True when a change between two preference values must invalidate decisions. */
