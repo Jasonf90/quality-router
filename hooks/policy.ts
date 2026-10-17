@@ -31,10 +31,10 @@ const HIGH_RISK: Rule[] = [
   { re: /\b(security|vulnerab\w*|exploits?|xss|csrf|sql injection|injection attacks?|sanitiz\w*|cve-\d+|sandbox escape)\b/, signal: 'security' },
   { re: /\b(production (database|db|data|deploy\w*|release)|prod (db|database|deploy|data)|release signing|code signing|provisioning profiles?|deploy to prod\w*)\b/, signal: 'production' },
   { re: /\b(biometric\w*|face ?id|touch ?id|healthkit|health data|medical records?|background location|location tracking)\b/, signal: 'sensitive data' },
-  { re: /\b(submit\w* (it |this |the app |the build |the update |build \d+ |\d+ )?(for|to) (app store |apple |google play |play store )?review|app store connect|testflight|(release|publish|ship|upload)\w* (it |the app |the build |the update |a build |build \d+ )?(to|on) (the )?(app store|play store|testflight|production)|phased release)\b/, signal: 'store release' },
+  { re: /\b(submit\w* (it |this |the app |the build |the update |build \d+ |\d+ )?(for|to) (app store |apple |google play |play store )?review|app store connect|testflight|(release|publish|ship|upload)\w* (it |the app |the build |the update |a build |build \d+ )?(to|on) (the )?(app store|play store|testflight|production)|phased release|then submit|build and upload( build)? \d+|upload\w* (the |a )?(new )?build|push\w* (the )?build \d+)\b/, signal: 'store release' },
   // A sync bug reaches every device a person owns, and a CloudKit schema
   // deployed to production cannot be taken back.
-  { re: /\b(icloud (sync\w*|kit|key[- ]?value( store)?|containers?|backups?)|cloudkit|ck(record|share|container|database|syncengine|subscription)s?|nspersistentcloudkitcontainer|nsubiquitouskeyvaluestore|(cross|multi)[- ]device (sync\w*|continuity|data|state)|sync\w* (across|between|to|with) (the |all |other |your |my |their |our |every )*(devices|platforms)|(data|device|cloud|two[- ]way|bidirectional|offline) sync\w*|sync conflicts?|conflict resolution|production schema|deploy\w* (the )?(cloudkit |production )?schema)\b/, signal: 'data sync' },
+  { re: /\b(icloud (sync\w*|kit|key[- ]?value( store)?|containers?|backups?)|cloudkit|ck(record|share|container|database|syncengine|subscription)s?|nspersistentcloudkitcontainer|nsubiquitouskeyvaluestore|(cross|multi)[- ]device (sync\w*|continuity|data|state)|sync\w* (across|between|to|with) (the |all |other |your |my |their |our |every )*(devices|platforms)|(data|device|cloud|two[- ]way|bidirectional|offline) sync\w*|sync conflicts?|conflict resolution|production schema|deploy\w* (the )?(cloudkit |production )?schema|schema deploy\w*)\b/, signal: 'data sync' },
 ]
 
 /** An auth-flavoured task that only touches presentation is not high risk. */
@@ -62,14 +62,14 @@ const FILE_REF = /\b[\w/.-]+\.(swift|kt|kts|java|ts|tsx|js|jsx|dart|m|mm|h|gradl
 
 const CONSEQUENTIAL_REVIEW = /\b(review|audit)\b[^.]*\b(pr|pull request|before (release|merge|ship\w*|launch)|architecture|security|release)\b|\b(security|architecture|release) (review|audit)\b/
 const REVIEW = /\b(review|audit|critique|second opinion)\b/
-const DEBUG = /\b(fix\w*|bugs?|errors?|failing|fails|failed|broken|crash\w*|exceptions?|stack ?traces?|doesn'?t work|not working|regressions?|debug\w*|issues?)\b/
+const DEBUG = /\b(fix\w*|bugs?|errors?|failing|fails|failed|broken|crash\w*|exceptions?|stack ?traces?|(doesn'?t|does not|don'?t|do not) work|not working|regressions?|debug\w*|issues?)\b/
 const TEST = /\b(write|add|generate|create|update|extend) (some |more |the )?(unit |ui |integration |snapshot |e2e |end-to-end |widget |instrumented )?tests?\b|\btest coverage\b|\bunit tests?\b|\bxctest\b|\bespresso\b|\bdetox\b|\bmaestro\b|\bwidget tests?\b/
 const IMPLEMENT = /\b(implement\w*|add(s|ing)?|build(s|ing)? (a|an|the|out|new)|create(s|ing)?|integrat\w*|wire (it |this |them )?(up|to|into)|hook (it |this |them )?up|support for|new (screen|view|feature|component|endpoint|page|flow))\b/
 const REFACTOR = /\b(refactor\w*|extract (a |the |this )?(function|method|component|view|hook|class|module)|rename\w*|clean ?up|simplif\w*|de-?duplicat\w*|split (this|the) (file|function|component|view))\b/
 const DOCS = /\b(readme|documentation|docs|docstrings?|code comments|add comments|comments? (to|for|in)|changelog|release notes)\b/
 const MECHANICAL = /\b(typos?|spelling|misspell\w*|reformat\w*|format (the|this|all)|prettier|swiftformat|ktlint --format|lint ?fix|sort (the )?imports|remove unused (imports|variables|code)|bump (the )?(app )?version|update (the )?(version|copyright|year|build number)|rename \S+ to \S+|convert (this |the )?(json|yaml|csv|plist|xml)|change (the )?([\w-]+ ){0,2}(colou?r|text|label|string|title|copy|font size|padding|margin|icon)s?|capitali[sz]\w*|translate (the |these )?strings?|locali[sz]\w* (string|key)s?)\b/
 /** Debugging beyond the bare word "fix": a mechanical "fix the typo" is not a bug fix. */
-const DEBUG_BEYOND_FIX = /\b(bugs?|errors?|failing|fails|failed|broken|crash\w*|exceptions?|stack ?traces?|doesn'?t work|not working|regressions?|debug\w*|issues?)\b/
+const DEBUG_BEYOND_FIX = /\b(bugs?|errors?|failing|fails|failed|broken|crash\w*|exceptions?|stack ?traces?|(doesn'?t|does not|don'?t|do not) work|not working|regressions?|debug\w*|issues?)\b/
 /** Restructuring code, not just renaming it. */
 const REFACTOR_BEYOND_RENAME = /\b(refactor\w*|extract (a |the |this )?(function|method|component|view|hook|class|module)|simplif\w*|de-?duplicat\w*|split (this|the) (file|function|component|view)|replac\w* .{1,60}? with|rewrit\w*|restructur\w*|migrat\w*)\b/
 /** Words that make an edit a change of behaviour rather than of text. */

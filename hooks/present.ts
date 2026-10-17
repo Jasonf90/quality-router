@@ -9,7 +9,7 @@ import { type Estimate, agentEstimate, duration, etaText, overallAgentEta, taskE
 import { recommend } from './advisor'
 import { verdict } from './escalation'
 import { formatWhen, isWeekly, kindLabel, type Projection } from './limits'
-import { cacheAwareHeadline, lifetime, tierShare } from './savings'
+import { cacheAwareHeadline, compactionNet, lifetime, tierShare } from './savings'
 import { cacheTtlOf, shortModel, tierOfModel } from './settings'
 import { type Snapshot, codeNow, effortText, glyphs, headline, isPausedView, modeLabel, projections, selection } from './view'
 
@@ -105,11 +105,13 @@ export function limitMeter(p: Projection): Meter {
 }
 
 export type SessionSavings = {
-  /** `saved`: requests were actually routed. `could`: what applying the proposals might have saved. */
+  /** `saved`: requests were actually routed, or the router compacted. `could`: what applying the proposals might have saved. */
   kind: 'saved' | 'could'
   usd: number
   percent: number | null
   baselineModel: string
+  /** The two estimates `usd` adds up, when the router compacted: routing's and the compactions' (net of their cost). */
+  parts?: { routing: number; compaction: number }
 }
 
 /**
@@ -128,7 +130,15 @@ export type SessionSavings = {
 export function sessionSavings(v: View): SessionSavings | null {
   const routed = v.prefs.state === 'on' || v.ledger.routedRequests > 0
   const h = cacheAwareHeadline(v.ledger.cacheAware, routed)
-  return h ? { kind: h.kind, usd: h.usd, percent: h.percent, baselineModel: v.rt.sessionModel ?? v.prefs.models.strong } : null
+  const baselineModel = v.rt.sessionModel ?? v.prefs.models.strong
+  const comp = compactionNet(v.ledger.compaction)
+  // A what-if (`could`) is never added to what the compactions actually did.
+  if (comp === null || (h && h.kind === 'could')) return h ? { kind: h.kind, usd: h.usd, percent: h.percent, baselineModel } : null
+  const routing = h ? h.usd : 0
+  const ca = v.ledger.cacheAware
+  const without = ca && ca.priced > 0 ? (routed ? ca.stayUsd : ca.actualUsd) + (v.ledger.compaction?.savedUsd ?? 0) : 0
+  const total = routing + comp
+  return { kind: 'saved', usd: total, percent: without > 0 ? Math.round((total / without) * 100) : null, baselineModel, parts: { routing, compaction: comp } }
 }
 
 /**
@@ -149,12 +159,18 @@ export function savingsMeter(v: View): Meter {
   const mark = v.activity.savingsMark
   const delta = mark && mark.kind === s.kind ? s.usd - mark.usd : null
   const deltaNote = delta !== null && Math.abs(delta) >= 0.005 ? `${delta >= 0 ? '+' : '-'}${usd(Math.abs(delta))} this turn` : null
-  const pctNote = s.percent !== null ? `${Math.abs(s.percent)}% ${more ? 'more' : 'less'} than all ${shortModel(s.baselineModel)}` : null
+  const pctNote = s.percent !== null ? `${Math.abs(s.percent)}% ${more ? 'more' : 'less'} than ${s.parts ? 'without the router' : `all ${shortModel(s.baselineModel)}`}` : null
+  // Right after a compaction its cost is all in and its saving still to come.
+  const payingBack = (v.ledger.compaction?.offset ?? 0) > 0 && (s.parts?.compaction ?? 0) < 0 ? ' (paying back over the next requests)' : ''
+  const partsNote = s.parts ? `routing ${s.parts.routing < 0 ? '-' : ''}${usd(Math.abs(s.parts.routing))}, compaction ${s.parts.compaction < 0 ? '-' : ''}${usd(Math.abs(s.parts.compaction))}${payingBack}` : null
   const could = s.kind === 'could'
+  const comp = compactionNet(v.ledger.compaction)
   const note = [
     could ? `this session if ON` : 'this session',
     deltaNote,
     pctNote,
+    partsNote,
+    could && comp !== null ? `compaction est. ${usd(Math.abs(comp))} ${comp >= 0 ? 'saved' : 'more'}` : null,
     could ? 'list prices, re-caching included' : null,
     failed ? 'some checks failed' : null,
     lifeNote,
@@ -341,5 +357,6 @@ export function lifetimeLine(log: SavingsEntry[]): string {
   if (l.sessions === 0) return `No sessions recorded with the cache-aware estimate yet${legacy}.`
   const pct = l.percent !== null ? ` (${Math.abs(l.percent)}% ${l.usd >= 0 ? 'less' : 'more'})` : ''
   const failed = l.failedPhases > 0 ? ` · ${l.failedPhases} task(s) failed their checks` : ''
-  return `${l.sessions} session(s): est. ${usd(Math.abs(l.usd))} ${l.usd >= 0 ? 'lower' : 'higher'} at list prices, cache-aware${pct}${failed}${legacy}`
+  const comp = l.compactionUsd !== 0 ? `, of which the router's compactions est. ${usd(Math.abs(l.compactionUsd))} ${l.compactionUsd >= 0 ? 'saved' : 'more'}` : ''
+  return `${l.sessions} session(s): est. ${usd(Math.abs(l.usd))} ${l.usd >= 0 ? 'lower' : 'higher'} at list prices, cache-aware${pct}${comp}${failed}${legacy}`
 }

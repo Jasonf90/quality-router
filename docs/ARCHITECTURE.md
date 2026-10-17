@@ -13,7 +13,7 @@
 | `hooks/classifier.ts` | When to classify, the fenced prompt, strict reply parsing | no |
 | `hooks/escalation.ts` | Tool-outcome classification, repair tracking, validation status | no |
 | `hooks/accounting.ts` | Per-request ledger, deduplication, unknown-usage handling | no |
-| `hooks/savings.ts` | Same-volume estimate, experiment comparison | no |
+| `hooks/savings.ts` | Same-volume and cache-aware estimates, the router's compaction savings, experiment comparison | no |
 | `hooks/limits.ts` | Plan-limit readings and the weekly projection | no |
 | `hooks/settings.ts` | Defaults, dated pricing, preference and project-file validation | no |
 | `hooks/commands.ts` | `/quality-router` parsing | no |
@@ -131,6 +131,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 - **A proposal is read from the answer's words.** Only the opening 1,500 and closing 2,500 characters are read, with the same rules as a prompt. A risk mentioned only in the middle of a long answer is not seen; one mentioned in passing at the end raises the reply that follows (a cost, never a quality loss).
 - **The settings guard undoes changes made in an older session on purpose too.** It cannot tell a deliberate press in an older copy's band from a stale save, so it restores and says so; make the change again in a current session.
 - **The cache-aware savings estimate is a model.** It holds output tokens equal across paths and approximates the conversation's growth at a model switch (another model can encode the same history in fewer tokens). On the audited sessions two independent versions of it differed by $7–13 on a $220 session; both agreed on the direction.
+- **The compaction saving is a counterfactual.** It assumes the same requests would have followed without the compaction, and that Claude Code would have compacted at its window minus a ~33k buffer (its documented behaviour at the time of writing; with the window unknown nothing is credited). The summary's size is estimated when the host does not report it, from what every request carries plus 25k.
 - **Auto-compaction needs a turn end.** A mod cannot compact while a turn runs, so a single long agentic turn grows until it ends (or until Claude Code's own compaction). The usage record is saved every 25 requests or 10 minutes, so long turns no longer leave it only in memory.
 - **A manual `/model` pause does not survive `/clear`** (the engine resets the mod's state). The project file and stored history are re-read after `/clear`.
 - **Escalation is enforced, but signals are heuristic.** "Credible evidence" means observed checks failing after edits; the router can't see test intent beyond what the commands and file paths say. Insufficient confidence mid-task isn't detected from the model's text.

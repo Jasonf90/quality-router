@@ -107,6 +107,7 @@ The band above the prompt keeps its buttons on a row of their own at the bottom,
 - **Savings, all session long:** its own row, updated after every request.
   - **Saved est. $X this session** (or **Cost more est. $X**), plus **+$Y this turn**, the percentage versus staying on Claude Code's own model, and the all-sessions total. It is *cache-aware*: each model switch is charged for caching the whole conversation on the new model, and again on the way back (see *Viewing usage and savings*).
   - Before anything is routed (OFF or DRY RUN) it reads **Could save est. $X this session if ON**, priced the same cache-aware way. That uses the deterministic rules only: no classifier calls and no change to any request.
+  - Once smart auto-compact has compacted, the figure adds what those compactions saved, net of their cost, and splits the two (**routing $X, compaction $Y**). The percentage is then against the session without the router. Right after a compaction its cost is counted and its saving is still to come, so that part can read negative for a while (*paying back over the next requests*).
 - **What just happened:** the outcome of a button or of something the router did on its own (a compaction, an escalation, a fallback) stays as a line in the band for three minutes. The desktop app may not show notifications.
   - Once something was routed, the real estimate stays visible even after you turn routing off.
 - **Meters with bars:**
@@ -242,7 +243,7 @@ The command is registered as `immediate`, so `/quality-router off` works mid-tur
 
 `tests/guarantees.test.ts` checks these rules over every combination the router's decision can see: each task category, risk, ambiguity, breadth, rules tier, confidence, mode, session effort, and the escalation, classifier-fallback and failed-check flags (437,400 decisions per rule):
 
-- High-risk work (auth, payments, privacy, migrations, security, production, sensitive data, store releases, data that syncs across devices) always runs on the strongest tier, in every mode.
+- High-risk work (auth, payments, privacy, migrations, security, production, sensitive data, store releases, including terse steps like *push build 7* or *…then submit*, data that syncs across devices) always runs on the strongest tier, in every mode.
 - Tasks judged to be code work (implementing, fixing, testing, refactoring, reviewing, design, diagnosis) never start on the cheap tier, in any mode. A *mechanical* edit is only one with no fix, refactor or behaviour change in it: "fix the typo" is mechanical, "bump the version and fix the crash" or "change the validation so…" is not.
 - A task that did start on the cheap tier (a look-up, summary or question) and then writes code moves up to the middle tier for the rest of the task. This applies to an edit to a source file, or a shell command that plainly writes one (`sed -i`, a redirect, `tee`). Mechanical edits (typos, renames, version bumps) stay where they are. Unlike the rules above, this one is checked by its own tests, not the exhaustive sweep.
 - In quality-first, the cheap tier gets only mechanical edits, look-ups, summaries and classification.
@@ -365,6 +366,10 @@ The pane (and `/quality-router usage`) keeps three things separate:
   - Cache writes are priced at the inferred lifetime (`cache-ttl auto`), or at your setting.
   - Negative differences are shown as negative: **Cost more est. $X**.
   - The all-sessions total adds up only sessions recorded this way; older entries, priced the earlier way, are left out and counted.
+- **B3. Compaction by the router (estimate).** Only the compactions smart auto-compact (or the plain threshold) chose; one you ask for with the button or `/quality-router compact` is yours and not counted.
+  - *Cost:* reading the conversation once, writing the summary, and caching it.
+  - *Saving:* each later main-conversation request is credited with the cache reads of the tokens it no longer carries, until the point where Claude Code would have compacted on its own anyway (its window minus its ~33k buffer). Any compaction the router did not make (Claude Code's own, a typed `/compact`) ends the credit.
+  - It assumes the same requests would have followed, at list prices. The all-sessions total includes it and says how much of the total it is.
 - **B2. "Estimated pricing difference — same recorded token volumes."** The earlier method, kept for comparison: your recorded volumes priced at each responding model versus all priced at one baseline. It ignores re-caching on switches, so on long conversations it overstates savings and can show a saving where routing cost more.
 - **C. Experimental token reduction.** Only from runs you record yourself under matching conditions. Otherwise it says *No comparable baseline*.
 

@@ -246,3 +246,27 @@ describe('learned from the sessions of Oct 12-14 (paraphrased)', () => {
     expect(answerDemands(`Done.\n${filler.slice(0, 3000)} payments ${filler}\nAll checks pass.`)).toBe(null)
   })
 })
+
+describe('learned from the sessions of Oct 15-17 (paraphrased)', () => {
+  test('terse release steps are high risk: what is uploaded or submitted reaches people', () => {
+    for (const t of [
+      'Build and upload 14',
+      'push build 7',
+      'upload the new build',
+      'finish the support page and the screenshots, then submit',
+      'complete the schema deploy for me',
+    ]) {
+      expect(`${t}: ${analyzePrompt(t).risk}`).toBe(`${t}: high`)
+      expect(`${t}: ${route(t).tier}`).toBe(`${t}: strong`)
+    }
+    for (const t of ['push the branch', 'build the project and run the tests', 'upload the logs to the issue']) {
+      expect(`${t}: ${analyzePrompt(t).signals.includes('store release')}`).toBe(`${t}: false`)
+    }
+  })
+
+  test('"does not work" and "don\'t work" are bug reports, like "doesn\'t work"', () => {
+    for (const t of ['mouse input does not work on any pop up window', "the buttons on the mac pop ups don't work"]) {
+      expect(`${t}: ${analyzePrompt(t).category}`).toBe(`${t}: debug`)
+    }
+  })
+})

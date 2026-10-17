@@ -8,8 +8,11 @@
 // C. Experimental token reduction: separately recorded routed and baseline
 //    runs of the same task from the same starting state, compared only when
 //    their declared conditions match.
+// D. The router's compactions: their estimated cost against the cache reads
+//    the smaller conversation avoided. Shown beside routing's estimate, each
+//    named, and added to it only where the band gives one figure.
 
-import type { Bucket, CacheAware, ExperimentArm, Ledger, ModelPrice, PathSim, Prefs, PriceRow, SavingsEntry, Tokens } from '../types'
+import type { Bucket, CacheAware, CompactionSavings, ExperimentArm, Ledger, ModelPrice, PathSim, Prefs, PriceRow, SavingsEntry, Tokens } from '../types'
 import { addTokens, allTokens, emptyBucket, subTokens, zeroTokens } from './accounting'
 import { cacheTtlOf } from './settings'
 
@@ -284,20 +287,24 @@ export function logSavings(log: SavingsEntry[], entry: SavingsEntry): SavingsEnt
   return [...log.filter(e => e.sessionId !== entry.sessionId), entry].slice(-200)
 }
 
-export type Lifetime = { usd: number; percent: number | null; sessions: number; failedPhases: number }
+export type Lifetime = { usd: number; percent: number | null; sessions: number; failedPhases: number; compactionUsd: number }
 
 /**
- * All sessions' cache-aware estimates added up. Entries from before 0.8.1
- * priced the same volumes, which overstates savings on long conversations;
- * they are left out of the total (and counted, so nothing vanishes silently).
+ * All sessions' cache-aware estimates added up, routing and the router's
+ * compactions together. Entries from before 0.8.1 priced the same volumes,
+ * which overstates savings on long conversations; they are left out of the
+ * total (and counted, so nothing vanishes silently).
  */
 export function lifetime(log: SavingsEntry[]): Lifetime & { legacy: number } {
   const current = log.filter(e => e.method === 'cache-aware')
   const routed = current.reduce((s, e) => s + e.routedUsd, 0)
-  const baseline = current.reduce((s, e) => s + e.baselineUsd, 0)
+  const baseline = current.reduce((s, e) => s + e.baselineUsd + (e.compactionSavedUsd ?? 0), 0)
+  const compaction = current.reduce((s, e) => s + (e.compactionSavedUsd ?? 0) - (e.compactionCostUsd ?? 0), 0)
+  const saved = current.reduce((s, e) => s + e.baselineUsd - e.routedUsd, 0) + compaction
   return {
-    usd: baseline - routed,
-    percent: baseline > 0 ? Math.round(((baseline - routed) / baseline) * 100) : null,
+    usd: saved,
+    compactionUsd: compaction,
+    percent: baseline > 0 ? Math.round((saved / baseline) * 100) : null,
     sessions: current.filter(e => e.requests > 0).length,
     failedPhases: current.reduce((s, e) => s + e.failedPhases, 0),
     legacy: log.length - current.length,
@@ -425,4 +432,57 @@ export function cacheAwareHeadline(ca: CacheAware | undefined, routed: boolean):
   if (ca.actualUsd <= 0) return null
   const d = ca.actualUsd - ca.followUsd
   return { kind: 'could', usd: d, percent: Math.round((d / ca.actualUsd) * 100) }
+}
+
+// --- the router's compactions ----------------------------------------------
+
+/** Claude Code keeps this much of its window free and compacts on its own past the rest (/context shows 33k on 400k and 450k windows). */
+export const CLAUDE_CODE_COMPACT_BUFFER = 33_000
+
+export function emptyCompaction(): CompactionSavings {
+  return { count: 0, costUsd: 0, savedUsd: 0, offset: 0, unpriced: 0 }
+}
+
+/**
+ * The router compacted a conversation of `pre` tokens down to `post`. Its cost,
+ * estimated: reading the conversation once, writing the summary (what `post`
+ * holds beyond what every request carries anyway, `base`), and caching the
+ * result. From here each request is `pre - post` tokens smaller.
+ */
+export function compactionDone(c: CompactionSavings, i: { pre: number; post: number; base: number; model: string | null; prefs: Prefs }): CompactionSavings {
+  const found = i.model ? findPrice(i.model, i.prefs.pricing) : null
+  const offset = Math.max(0, i.pre - i.post)
+  if (!found) return { ...c, count: c.count + 1, offset: 0, unpriced: c.unpriced + 1 }
+  const row = rowFor(found.price, i.pre)
+  const write = cacheTtlOf(i.prefs) === '1h' ? row.cacheWrite1h : row.cacheWrite5m
+  const cost = (i.pre * row.cacheRead + Math.max(0, i.post - i.base) * row.output + i.post * write) / 1_000_000
+  return { ...c, count: c.count + 1, costUsd: c.costUsd + cost, offset }
+}
+
+/**
+ * A main-conversation request after a router compaction: the cache reads it
+ * avoided. Without the compaction it would carry `offset` more tokens, unless
+ * that took it past `point`, where Claude Code would have compacted on its own;
+ * from there on the two conversations are alike and nothing more is counted.
+ * With `point` unknown nothing is counted.
+ */
+export function compactionStep(c: CompactionSavings, i: { promptTokens: number; model: string; point: number | null; prefs: Prefs }): CompactionSavings {
+  if (c.offset <= 0 || i.point === null) return c
+  const found = findPrice(i.model, i.prefs.pricing)
+  const reaches = i.promptTokens + c.offset >= i.point
+  const extra = reaches ? Math.max(0, i.point - i.promptTokens) : c.offset
+  const offset = reaches ? 0 : c.offset
+  if (!found) return { ...c, offset }
+  const row = rowFor(found.price, i.promptTokens + extra)
+  return { ...c, savedUsd: c.savedUsd + (extra * row.cacheRead) / 1_000_000, offset }
+}
+
+/** Any other compaction (Claude Code's own, a typed /compact): it would have happened anyway, so the router's no longer counts. */
+export function compactionReset(c: CompactionSavings): CompactionSavings {
+  return c.offset === 0 ? c : { ...c, offset: 0 }
+}
+
+/** The router's compactions, net: saved minus their cost. Null before the first. */
+export function compactionNet(c: CompactionSavings | undefined): number | null {
+  return c && c.count - c.unpriced > 0 ? c.savedUsd - c.costUsd : null
 }

@@ -113,7 +113,7 @@ import {
 import { agentEstimate, recordRun } from './eta'
 import { addReading } from './limits'
 import { type Meter, type Tone, type View, agentRow, agentsMeter, band, barCells, barChars, contextMeter, lifetimeLine, limitMeter, recommendations, savingsMeter, sessionSavings, taskLines, taskMeter, tierBars } from './present'
-import { cacheAwareStep, emptyCacheAware, logSavings } from './savings'
+import { CLAUDE_CODE_COMPACT_BUFFER, cacheAwareStep, compactionDone, compactionReset, compactionStep, emptyCacheAware, emptyCompaction, logSavings } from './savings'
 import { analyzePrompt, analyzeSubagent, answerDemands, assessFromTasks, decide, isExecution, isFollowUp, isPlanPrompt, raisesTask, strongerAnalysis } from './policy'
 import { type TtlEvidence, expectedPhaseRequests, resolveTtl, switchPays, ttlEvidence } from './economics'
 import { DEFAULT_PREFS, cacheTtlOf, describePrefsChange, nextMode, normalizePrefs, parseProjectConfig, prefsStamp, routingChanged, shortModel, stampValid, tierOfModel, tierRank } from './settings'
@@ -305,22 +305,26 @@ async function loadAgentStats($: Engine, canWrite = true): Promise<AgentStats> {
 
 /** Folds this session's current estimate into the savings log and stores it. */
 async function recordSavings($: Engine): Promise<void> {
-  const prefs = await getPrefs($)
   const ledger = await read($, ledgerAtom)
-  if (!ledger.sessionId || ledger.routedRequests === 0) return
+  const comp = ledger.compaction
+  const compacted = comp !== undefined && comp.count - comp.unpriced > 0
+  if (!ledger.sessionId || (ledger.routedRequests === 0 && !compacted)) return
   const ca = ledger.cacheAware
   if (!ca || ca.priced === 0 || ca.stayUsd <= 0) return
+  const routed = ledger.routedRequests > 0
   const phases = (await read($, historyAtom)).phases
   const entry: SavingsEntry = {
     sessionId: ledger.sessionId,
     at: await $.clock.now(),
     method: 'cache-aware',
+    // Not routed: what ran is what staying would have cost.
     routedUsd: ca.actualUsd,
-    baselineUsd: ca.stayUsd,
+    baselineUsd: routed ? ca.stayUsd : ca.actualUsd,
     requests: ledger.total.requests,
     routedRequests: ledger.routedRequests,
     failedPhases: phases.filter(p => p.verdict === 'failed').length,
     verifiedPhases: phases.filter(p => p.verdict === 'verified').length,
+    ...(compacted && comp ? { compactionCostUsd: comp.costUsd, compactionSavedUsd: comp.savedUsd } : {}),
   }
   await loadSavingsLog($)
   const next = await update($, savingsLogAtom, log => logSavings(log, entry))
@@ -355,6 +359,12 @@ async function recordRequest($: Engine, rec: RequestRecord): Promise<boolean> {
       at: rec.at,
     }
     await update($, ledgerAtom, l => ({ ...l, cacheAware: cacheAwareStep(l.cacheAware ?? emptyCacheAware(), step, prefs) }))
+    if (rec.role === 'main' && (await read($, ledgerAtom)).compaction?.offset) {
+      const window = (await read($, activityAtom)).context?.window ?? null
+      const point = window && window > CLAUDE_CODE_COMPACT_BUFFER * 3 ? window - CLAUDE_CODE_COMPACT_BUFFER : null
+      const model = rec.observedModel ?? rec.requestedModel
+      await update($, ledgerAtom, l => ({ ...l, compaction: compactionStep(l.compaction ?? emptyCompaction(), { promptTokens: promptTokens(usage), model, point, prefs }) }))
+    }
   }
   await update($, historyAtom, h => ({ ...h, requests: [...h.requests, rec].slice(-60) }))
   await update($, experimentAtom, x =>
@@ -1441,6 +1451,24 @@ function errorText(err: unknown): string {
 /** Compacts now, with the current task as the focus; scheduleCompaction runs it, between turns. */
 async function compactNow($: Engine, automatic = false): Promise<CompactOutcome> {
   let instructions = 'Keep the current task: its goal, the decisions made, the files involved, open problems and next steps.'
+  // What the conversation was before, for the estimate of what compacting saves.
+  // Only the router's own choice counts: one asked for by button or command was the person's.
+  const before = await read($, runtimeAtom)
+  const counted = async (after: number | null) => {
+    if (!automatic) return
+    const rt = await read($, runtimeAtom)
+    const prefs = await priced($, await getPrefs($))
+    await update($, ledgerAtom, l => ({
+      ...l,
+      compaction: compactionDone(l.compaction ?? emptyCompaction(), {
+        pre: before.lastPromptTokens,
+        post: after ?? rt.lastPromptTokens,
+        base: rt.basePrompt ?? 17_000,
+        model: before.observedModel ?? before.sessionModel,
+        prefs,
+      }),
+    }))
+  }
   try {
     const rt = await read($, runtimeAtom)
     instructions = compactInstructions(rt.phase?.analysis?.category ?? null, rt.phase?.planPrompt === true || automatic)
@@ -1456,11 +1484,13 @@ async function compactNow($: Engine, automatic = false): Promise<CompactOutcome>
       if (compactCommandFailed(out)) return { ok: false, text: `/compact said: ${out.slice(0, 200).replace(/[.\s]+$/, '')}`, instructions }
       await patchActivity($, a => ({ ...a, compactions: a.compactions + 1 }))
       await onCompacted($, null)
+      await counted(null)
       return { ok: true, text: 'Conversation compacted (through /compact), with the current task kept in focus.', instructions }
     }
     if ('skip' in r && r.skip !== undefined) return { ok: false, text: `skipped: ${r.skip}`, instructions }
     await patchActivity($, a => ({ ...a, compactions: a.compactions + 1 }))
     await onCompacted($, r.tokensAfter ?? null)
+    await counted(r.tokensAfter ?? null)
     const sizes = r.tokensBefore && r.tokensAfter ? ` (${Math.round(r.tokensBefore / 1000)}k → ${Math.round(r.tokensAfter / 1000)}k tokens)` : ''
     return { ok: true, text: `Conversation compacted${sizes}, with the current task kept in focus.`, instructions }
   } catch (err) {
@@ -1789,6 +1819,8 @@ export const register: Register = on => {
     const r = await next(input)
     if (e.trigger !== 'precompute' && e.agentId === undefined && !('skip' in r && r.skip !== undefined)) {
       await safe(() => onCompacted($, r.tokensAfter ?? null))
+      // Claude Code's own, or a typed /compact: the router's last compaction no longer counts from here.
+      if (compactingSince === null) await safe(async () => { await update($, ledgerAtom, l => (l.compaction ? { ...l, compaction: compactionReset(l.compaction) } : l)) })
     }
     return r
   })

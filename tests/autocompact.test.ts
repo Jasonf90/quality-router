@@ -4,6 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import { AUTO_COMPACT_COOLDOWN_MS, autoCompactDue, smartCompactDue, watchReport } from '../hooks/advisor'
 import { parseCommand } from '../hooks/commands'
 import { compactCommandFailed, needsCompactCommand } from '../hooks/core'
+import { compactionDone, compactionNet, compactionReset, compactionStep, emptyCompaction } from '../hooks/savings'
 import { normalizePrefs } from '../hooks/settings'
 import { BAND_PROPS, SLOW, SPAWN, bash, cmd, edit, install, start, step, tool, turn } from './harness'
 
@@ -329,5 +330,82 @@ describe("Claude Code's own compactions (mock integration)", () => {
     expect(w.compactions.length).toBe(1)
     await turn($, 'How does the settings screen decide which theme to show?', 't2')
     expect(w.sent[1]?.model).toBe('claude-opus-5-5')
+  })
+})
+
+describe("what the router's compactions save (estimate)", () => {
+  const near = (a: number | null, b: number) => expect(a !== null && Math.abs(a - b) < 1e-9).toBe(true)
+  const pane = ($: Engine) => $.ui.mount({ plugin: 'quality-router', surface: 'terminal', component: 'Pane', requestId: 'quality-router', props: { title: 'Quality Router', isFocused: false } as never })
+  const prefs = normalizePrefs({ version: 2, cacheTtl: '5m' })
+  const opus = 'claude-opus-5-5'
+
+  test('cost: one read of the conversation, the summary written, the summary cached', () => {
+    const c = compactionDone(emptyCompaction(), { pre: 400_000, post: 40_000, base: 17_000, model: opus, prefs })
+    // 400k reads at 0.2 + 23k summary at 20 + 40k cache writes at 5, per million
+    near(c.costUsd, 0.74)
+    expect(c).toMatchObject({ count: 1, offset: 360_000, unpriced: 0 })
+    near(compactionNet(c), -0.74)
+  })
+
+  test('each later request is credited with what it no longer carries, until Claude Code would have compacted anyway', () => {
+    let c = compactionDone(emptyCompaction(), { pre: 400_000, post: 40_000, base: 17_000, model: opus, prefs })
+    c = compactionStep(c, { promptTokens: 50_000, model: opus, point: 417_000, prefs })
+    near(c.savedUsd, 0.072)
+    expect(c.offset).toBe(360_000)
+    // 60k + 360k passes 417k: only up to that point counts, then nothing more.
+    c = compactionStep(c, { promptTokens: 60_000, model: opus, point: 417_000, prefs })
+    near(c.savedUsd, 0.072 + 0.0714)
+    expect(c.offset).toBe(0)
+    expect(compactionStep(c, { promptTokens: 70_000, model: opus, point: 417_000, prefs })).toEqual(c)
+  })
+
+  test('nothing is counted without a known window, after any other compaction, or without a price', () => {
+    const c = compactionDone(emptyCompaction(), { pre: 400_000, post: 40_000, base: 17_000, model: opus, prefs })
+    expect(compactionStep(c, { promptTokens: 50_000, model: opus, point: null, prefs })).toEqual(c)
+    expect(compactionReset(c).offset).toBe(0)
+    const unpriced = compactionDone(emptyCompaction(), { pre: 400_000, post: 40_000, base: 17_000, model: 'claude-mystery-1', prefs })
+    expect(unpriced).toMatchObject({ count: 1, unpriced: 1, offset: 0, costUsd: 0 })
+    expect(compactionNet(unpriced)).toBe(null)
+    expect(compactionNet(undefined)).toBe(null)
+  })
+
+  test("in the session: an automatic compaction is counted in the report and the band; one you ask for is not", SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = { input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 0 }
+    w.context = { tokens: 402_000, window: 1_000_000, percent: 40 }
+    await start($)
+    await cmd($, 'on')
+    await cmd($, 'autocompact 300k')
+    await turn($, 'start phase 3', 't1')
+    await w.clock.advance(2000)
+    expect(w.compactions.length).toBe(1)
+    w.stepUsage = { input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 60_000, cache_creation_input_tokens: 0 }
+    w.context = { tokens: 62_000, window: 1_000_000, percent: 6 }
+    await turn($, 'start phase 4', 't2', 3)
+    const report = await pane($)
+    expect(await report.find({ text: /B3\. COMPACTION BY THE ROUTER/ })).not.toBe(undefined)
+    expect(await report.find({ text: /1 compaction\(s\) cost \$[\d.]+; the requests after them read \$[\d.]+ less context/ })).not.toBe(undefined)
+    await report.unmount()
+    const ui = await $.ui.mount({ plugin: 'quality-router', component: 'AbovePrompt', props: BAND_PROPS, surface: 'desktop' })
+    expect(await ui.find({ type: 'Text', text: /compaction -?\$[\d.]+/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('a compaction asked for by command is the person\'s, not counted as the router\'s', SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = { input_tokens: 2000, output_tokens: 1000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 0 }
+    w.context = { tokens: 402_000, window: 1_000_000, percent: 40 }
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'start phase 3', 't1')
+    await cmd($, 'compact')
+    await w.clock.advance(300)
+    expect(w.compactions.length).toBe(1)
+    await turn($, 'start phase 4', 't2')
+    const report = await pane($)
+    expect(await report.find({ text: /B3\. COMPACTION BY THE ROUTER/ })).not.toBe(undefined)
+    expect(await report.find({ text: /none this session/ })).not.toBe(undefined)
+    expect(await report.find({ text: /compaction\(s\) cost/ })).toBe(undefined)
+    await report.unmount()
   })
 })

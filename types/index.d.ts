@@ -325,6 +325,24 @@ export type Ledger = {
   engineCostUsd: number | null
   /** The cache-aware estimate, built request by request (absent in ledgers from before 0.8.1). */
   cacheAware?: CacheAware
+  /** The router's own compactions and what they are estimated to have saved (savings.compactionStep). */
+  compaction?: CompactionSavings
+}
+
+/**
+ * The router's compactions, estimated at list prices: what each cost (reading
+ * the conversation, writing the summary, caching it) and the cache reads the
+ * smaller conversation avoided on every request until the next compaction,
+ * or until Claude Code would have compacted on its own.
+ */
+export type CompactionSavings = {
+  count: number
+  costUsd: number
+  savedUsd: number
+  /** Tokens the latest router compaction took out that each request since would otherwise still carry; 0 once another compaction ran. */
+  offset: number
+  /** Compactions on a model with no price: counted, not estimated. */
+  unpriced: number
 }
 
 export type CheckKind = 'build' | 'test' | 'lint' | 'typecheck' | 'custom'
@@ -536,6 +554,9 @@ export type SavingsEntry = {
   routedRequests: number
   failedPhases: number
   verifiedPhases: number
+  /** The router's compactions in this session: their estimated cost and what they saved (list prices). */
+  compactionCostUsd?: number
+  compactionSavedUsd?: number
 }
 
 declare module 'claude-code' {

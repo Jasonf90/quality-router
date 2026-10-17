@@ -258,6 +258,19 @@ export function usageText(s: Snapshot): string {
   lines.push(`  validation of finished phases: ${verified} verified, ${failed} failed, ${phases.length - verified - failed} unverified`)
   if (failed > 0) lines.push('  phases that failed validation are not successful optimizations, whatever they cost')
 
+  const comp = s.ledger.compaction
+  lines.push('', 'B3. COMPACTION BY THE ROUTER (estimate, part of the band\'s figure)')
+  if (!comp || comp.count === 0) {
+    lines.push('  none this session')
+  } else {
+    const net = comp.savedUsd - comp.costUsd
+    lines.push(`  ${comp.count} compaction(s) cost ${usd(comp.costUsd)}; the requests after them read ${usd(comp.savedUsd)} less context: ${usd(Math.abs(net))} ${net >= 0 ? 'saved' : 'MORE'}`)
+    lines.push('  - cost: reading the conversation once, writing the summary, caching the summary')
+    lines.push('  - saving: each later main request is credited with the tokens it no longer carries, until Claude Code would have compacted on its own anyway (its window minus 33k)')
+    lines.push('  - assumes the same requests would have followed; list prices')
+    if (comp.unpriced > 0) lines.push(`  - ${comp.unpriced} compaction(s) on a model without a price are left out`)
+  }
+
   lines.push('', 'C. EXPERIMENTAL TOKEN REDUCTION')
   lines.push(s.experiment ? `  running: "${s.experiment.label}" (${s.experiment.arm}), ${s.experiment.requests} requests so far` : '  /quality-router experiment report <label> compares recorded runs; with none: No comparable baseline')
   return lines.join('\n')
