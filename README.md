@@ -179,7 +179,7 @@ Honesty rules:
   ```
 
   Claude Code then compacts on its own at about 417k (it keeps a ~33k buffer), mid-turn too. On recorded long sessions this, with smart auto-compact, cut cost by a further 1–35 points over the router alone (most where one turn ran to 700k+), at the price of a few compactions mid-work. The band suggests it when a turn grows past 500k, and `/quality-router status` shows the window in use.
-- **Claude Code's own compactions get the router's instructions too** (at its threshold, a summary it computes ahead, or a bare `/compact`), so they keep the plan, your stated preferences, rejected approaches and unresolved errors. A `/compact` you type with your own text is left as you wrote it.
+- **Claude Code's own compactions get the router's instructions too** (at its threshold, a summary it computes ahead, or a bare `/compact`), so they keep the same things (below). A `/compact` you type with your own text is left as you wrote it.
 - Sizes: `autocompact boundary <size>`, `autocompact ceiling <size>`.
 
 *Watching first:* `/quality-router autocompact watch` leaves the plain threshold in charge and changes nothing, but notes each moment smart *would* have compacted. A line appears in the band ("would compact now: the task is finished, 180k tokens"), and `/quality-router autocompact report` lists the moments, and how many plain compactions happened with a task still open. When the timing looks right, `autocompact smart` switches over.
@@ -189,8 +189,19 @@ Both kinds:
 - never run after an interrupted or failed turn, or while a subagent is still running;
 - wait at least 10 minutes between automatic compactions;
 - skip a turn end if you start typing first (Claude Code refuses it then), and try again at the next one;
-- tell the summary to keep the plan, what's done and what's next, your stated preferences and constraints (in your words where possible), the approaches already tried and rejected, and unresolved error messages verbatim;
 - say when they happened, in a notification and in the band.
+
+**What every summary is told to keep** (the router's compactions and Claude Code's own):
+- the task's goal and what you count as done, the decisions made, the files, open problems and next steps, and the plan in full;
+- in your words where possible: your preferences and constraints, **what you approved and how far that approval goes**, the approaches already tried and rejected, and unresolved errors verbatim;
+- **where the work stands:** changes not yet committed or verified, the last checks and whether they passed, how far an interrupted step had got, and the **side effects already done** (commits, pushes, uploads, submissions, deployments) with their ids, so none is repeated;
+- **work still running:** background builds, test runs, monitors, agents and workflows, with their ids and where their output goes, so they are checked on rather than started again;
+- exact values verbatim: version and build numbers, branches, commit hashes, ids, paths;
+- what the kind of task needs most: for a bug, the reproduction and each hypothesis tested; for code, the interfaces settled on and which steps are written and tested; for a design, the options weighed and why one won; for a review, each finding and whether it is fixed; for a release, what is uploaded, submitted or approved and what is left; for high-risk work, what can't be undone and what it must not break.
+
+The instructions are built from the router's verdict on the task (its kind and risk), never from the text of your prompts.
+
+Why these: in two weeks of recorded sessions, no correction from you followed any of 222 compactions, but most happened with a build, test run or monitor still going in the background. After about one in twelve of those the same one was started again with nothing changed, and a push script was re-run once.
 
 Recorded sessions show what compaction saves (29–52% at 300k), but not whether a summary dropped something that mattered: that is what watching is for.
 

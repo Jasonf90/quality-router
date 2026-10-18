@@ -1471,7 +1471,7 @@ async function compactNow($: Engine, automatic = false): Promise<CompactOutcome>
   }
   try {
     const rt = await read($, runtimeAtom)
-    instructions = compactInstructions(rt.phase?.analysis?.category ?? null, rt.phase?.planPrompt === true || automatic)
+    instructions = compactInstructions(rt.phase?.analysis ?? null, rt.phase?.planPrompt === true || automatic)
     $.ui.status('Quality Router: compacting…')
     const r = await $.session.compact({ instructions }).catch(async (err: unknown) => {
       // An SDK host (the desktop app, -p) compacts only through the /compact
@@ -1811,7 +1811,7 @@ export const register: Register = on => {
     if (e.agentId === undefined && !e.instructions && e.trigger !== 'plugin') {
       try {
         const rt = await read($, runtimeAtom)
-        input = { ...e, instructions: compactInstructions(rt.phase?.analysis?.category ?? null, true) }
+        input = { ...e, instructions: compactInstructions(rt.phase?.analysis ?? null, true) }
       } catch {
         input = e
       }

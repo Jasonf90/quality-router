@@ -1,6 +1,6 @@
 {
   "name": "quality-router",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Routes each task phase to the least expensive capable Claude model, with conservative escalation, validation tracking, honest usage and savings reporting, and an on/off/dry-run band with a one-button mode switch.",
   "author": {
     "name": "Quality Router contributors",

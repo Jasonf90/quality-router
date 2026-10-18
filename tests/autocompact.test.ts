@@ -3,7 +3,8 @@ import type { Engine } from 'claude-code/testing'
 
 import { AUTO_COMPACT_COOLDOWN_MS, autoCompactDue, smartCompactDue, watchReport } from '../hooks/advisor'
 import { parseCommand } from '../hooks/commands'
-import { compactCommandFailed, needsCompactCommand } from '../hooks/core'
+import { compactCommandFailed, compactInstructions, needsCompactCommand } from '../hooks/core'
+import { analyzePrompt } from '../hooks/policy'
 import { compactionDone, compactionNet, compactionReset, compactionStep, emptyCompaction } from '../hooks/savings'
 import { normalizePrefs } from '../hooks/settings'
 import { BAND_PROPS, SLOW, SPAWN, bash, cmd, edit, install, start, step, tool, turn } from './harness'
@@ -330,6 +331,52 @@ describe("Claude Code's own compactions (mock integration)", () => {
     expect(w.compactions.length).toBe(1)
     await turn($, 'How does the settings screen decide which theme to show?', 't2')
     expect(w.sent[1]?.model).toBe('claude-opus-5-5')
+  })
+})
+
+describe('what every summary is told to keep (pure)', () => {
+  test('beyond the task and plan: approvals and their scope, side effects done, work still running, exact values', () => {
+    const t = compactInstructions(null, false)
+    expect(t).toStartWith('Keep the current task: its goal and what the person counts as done')
+    expect(t).not.toContain('Keep any plan in full')
+    for (const part of [
+      'approaches already tried and rejected',
+      'what they approved and how far that approval goes',
+      'how far any step interrupted part-way had got',
+      'side effects already done (commits, pushes, uploads, submissions, deployments, messages sent) with their ids, so none is repeated',
+      'each background command, monitor, agent or workflow not yet finished, with its id',
+      'checked on rather than started again',
+      'version and build numbers, branch names, commit hashes',
+    ]) expect(`${part}: ${t.includes(part)}`).toBe(`${part}: true`)
+    expect(compactInstructions(null, true)).toContain('Keep any plan in full')
+  })
+
+  test('each kind of task adds what it most needs; a release and high-risk work add theirs', () => {
+    const bug = compactInstructions(analyzePrompt('the settings screen crashes when I rotate the phone'), true)
+    expect(bug).toStartWith('Keep the current debugging task')
+    expect(bug).toContain('each hypothesis tested and what it showed')
+    expect(bug).not.toContain('high risk')
+    const release = compactInstructions(analyzePrompt('push build 7 to TestFlight, then submit'), true)
+    expect(release).toContain('For the release: what is uploaded, submitted or approved')
+    expect(release).toContain('This work is high risk: keep what cannot be undone and is already done')
+    // A kind without its own focus gets the general instructions, unlabelled.
+    expect(compactInstructions(analyzePrompt('what does the onboarding flow do?'), true)).toStartWith('Keep the current task:')
+  })
+
+  test('built from the verdict alone: no text of the prompt reaches it', () => {
+    const t = compactInstructions(analyzePrompt('fix the crash in PaymentsVault.swift, key sk-test-123'), true)
+    for (const leak of ['PaymentsVault', 'sk-test-123', 'crash in']) expect(t.includes(leak)).toBe(false)
+  })
+
+  test("Claude Code's own compaction of high-risk work gets the release and risk lines", SLOW, async ($, on) => {
+    const w = install(on)
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'push build 7 to TestFlight, then submit', 't1')
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'earlier work', toolUses: [] }] } as never)
+    expect(w.compactions[0]).toContain('For the release')
+    expect(w.compactions[0]).toContain('This work is high risk')
+    expect(w.compactions[0]).toContain('checked on rather than started again')
   })
 })
 

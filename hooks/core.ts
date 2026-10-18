@@ -6,6 +6,8 @@
 
 import type {
   AgentRoute,
+  Analysis,
+  Category,
   CheckKind,
   Decision,
   Effort,
@@ -109,17 +111,49 @@ export function compactCommandFailed(output: string): boolean {
   return /error|fail|not enough|cannot|can't|nothing to compact/i.test(output)
 }
 
+const BUG_FOCUS = 'For the bug: how to reproduce it, each hypothesis tested and what it showed, and the failing output verbatim.'
+const CODE_FOCUS = 'For the code: the names and interfaces settled on, which steps are written, which are tested, and which remain.'
+const REVIEW_FOCUS = 'For the review: each finding with its file and line, which are fixed, and what is left to check.'
+
+/** What each kind of task is called in a summary, and what it most needs carried over beyond what every task does. */
+const CATEGORY_FOCUS: Partial<Record<Category, { label: string; focus: string }>> = {
+  debug: { label: 'debugging', focus: BUG_FOCUS },
+  diagnosis: { label: 'diagnosis', focus: BUG_FOCUS },
+  implement: { label: 'implementation', focus: CODE_FOCUS },
+  refactor: { label: 'refactoring', focus: CODE_FOCUS },
+  test: { label: 'testing', focus: CODE_FOCUS },
+  architecture: { label: 'design', focus: 'For the design: the options weighed, the one chosen and why, and the constraints it must meet.' },
+  review: { label: 'review', focus: REVIEW_FOCUS },
+  security: { label: 'security', focus: REVIEW_FOCUS },
+  docs: { label: 'writing', focus: 'For the writing: who it is for, the tone and format asked for, and which parts are done.' },
+}
+
 /**
  * What a summary should keep, for every compaction the router starts or
  * shapes: the task's goal, decisions, files, open problems and next steps,
  * the plan in full when there is one, and what summaries tend to lose (the
- * person's stated preferences and constraints, approaches already rejected,
- * unresolved errors word for word).
+ * person's stated preferences and constraints, what they approved, approaches
+ * already rejected, unresolved errors word for word).
+ *
+ * From the recorded sessions: most compactions happen with a build, test run
+ * or monitor still going in the background, and after about one in twelve of
+ * those the same one was started again with nothing changed; and a side effect
+ * (a push) was re-run once. So the summary also keeps work still running, side
+ * effects already done, and how far an interrupted step got.
  */
-export function compactInstructions(category: string | null, keepPlan: boolean): string {
-  const focus = category ? `the current ${category} task` : 'the current task'
+export function compactInstructions(analysis: Pick<Analysis, 'category' | 'risk' | 'signals'> | null, keepPlan: boolean): string {
+  const kind = analysis ? CATEGORY_FOCUS[analysis.category] : undefined
   const plan = keepPlan ? ' Keep any plan in full: every phase or step, which are done, which is current and what comes next.' : ''
-  return `Keep ${focus}: its goal, the decisions made, the files involved, open problems and next steps.${plan} Keep, in the person's own words where possible, the preferences and constraints they stated, the approaches already tried and rejected (and why), and any unresolved error messages verbatim. Drop superseded detail and finished side quests.`
+  const release = analysis?.signals.includes('store release') ? ' For the release: what is uploaded, submitted or approved, and the checklist items left.' : ''
+  const risky = analysis?.risk === 'high' ? ' This work is high risk: keep what cannot be undone and is already done, the safeguards it needs, and what it must not break.' : ''
+  return [
+    `Keep the current ${kind ? `${kind.label} ` : ''}task: its goal and what the person counts as done, the decisions made, the files involved, open problems and next steps.${plan}`,
+    "Keep, in the person's own words where possible, the preferences and constraints they stated, what they approved and how far that approval goes, the approaches already tried and rejected (and why), and any unresolved error messages verbatim.",
+    'Keep where the work stands: changes not yet committed or not yet verified, the last checks run (each command and whether it passed), how far any step interrupted part-way had got, and the side effects already done (commits, pushes, uploads, submissions, deployments, messages sent) with their ids, so none is repeated by mistake.',
+    'Keep work still running: each background command, monitor, agent or workflow not yet finished, with its id, what it does and where its output goes, so it is checked on rather than started again.',
+    `Copy exact values verbatim: version and build numbers, branch names, commit hashes, ids, paths and settings.${kind ? ` ${kind.focus}` : ''}${release}${risky}`,
+    'Drop superseded detail and finished side quests.',
+  ].join(' ')
 }
 
 export function reviewPrompt(files: string): string {

@@ -137,7 +137,7 @@ describe('the band (mock integration)', () => {
     expect(w.compactions.length).toBe(0)
     await w.clock.advance(300)
     expect(w.compactions.length).toBe(1)
-    expect(w.compactions[0]).toContain('current debug task')
+    expect(w.compactions[0]).toContain('current debugging task')
     expect(w.toasts.some(t => t.includes('Conversation compacted'))).toBe(true)
     await ui.press({ key: 'qr-dismiss' })
     expect(await ui.find({ type: 'Text', text: /compact soon/ })).toBe(undefined)
