@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Prefs } from '../types'
 import { EMPTY_RUNTIME, planStep } from '../hooks/core'
-import { analyzePrompt, analyzeSubagent, answerDemands, applyMode, decide, isContinuation, isExecution, isFollowUp, raisesTask } from '../hooks/policy'
+import { analyzePrompt, analyzeSubagent, answerDemands, applyMode, decide, followUpRaises, isContinuation, isExecution, isFollowUp, raisesTask } from '../hooks/policy'
 import { DEFAULT_PREFS, normalizePrefs } from '../hooks/settings'
 
 const prefs = (over: Partial<Prefs> = {}): Prefs => ({ ...DEFAULT_PREFS, ...over })
@@ -268,5 +268,74 @@ describe('learned from the sessions of Oct 15-17 (paraphrased)', () => {
     for (const t of ['mouse input does not work on any pop up window', "the buttons on the mac pop ups don't work"]) {
       expect(`${t}: ${analyzePrompt(t).category}`).toBe(`${t}: debug`)
     }
+  })
+})
+
+describe('learned from the sessions of Oct 18-23 (paraphrased)', () => {
+  const follow = (t: string) => isFollowUp(t, analyzePrompt(t))
+
+  test('a question about work under way carries the task on, as "keep going" does', () => {
+    for (const t of [
+      'tests still running?',
+      'Are they still running?',
+      'is the archive done yet',
+      'build 22 finished?',
+      'ipad build loaded yet?',
+      'how is the audit going?',
+      'almost done with the audit?',
+      'How far along is the test run?',
+      'how many screens are left?',
+      'What next then',
+      'What’s next on the list',
+      'what should we do next',
+    ])
+      expect(`${t}: ${follow(t)}`).toBe(`${t}: true`)
+    for (const t of ['keep it running', 'get the release ready', 'is build 40 live in TestFlight yet', 'how should the onboarding flow work?', 'Where is the theme defined?'])
+      expect(`${t}: ${follow(t)}`).toBe(`${t}: false`)
+  })
+
+  test('so it keeps the task it asks about, and never lowers it', () => {
+    const audit = analyzePrompt('Make a detailed plan to audit every screen and fix what is broken')
+    expect(applyMode(audit, 'quality-first').tier).toBe('strong')
+    // Started as new work it was a plain question, on the middle tier.
+    expect(applyMode(analyzePrompt('tests still running?'), 'quality-first').tier).toBe('middle')
+    expect(raisesTask(audit, analyzePrompt('tests still running?'), 'quality-first')).toBe(false)
+    const lookup = analyzePrompt('list all the files that import the theme')
+    expect(raisesTask(lookup, analyzePrompt('tests still running?'), 'quality-first')).toBe(true)
+    // One the rules cannot read would have started a new task on the strongest tier: it still gets that.
+    const fix = analyzePrompt('Fix the failing discount calculation in CartViewModel')
+    expect(applyMode(fix, 'quality-first').tier).toBe('middle')
+    expect(followUpRaises(fix, 'Build finished?', analyzePrompt('Build finished?'), 'quality-first')).toBe(true)
+    expect(followUpRaises(fix, 'ok thanks', analyzePrompt('ok thanks'), 'quality-first')).toBe(false)
+  })
+
+  test('typographic apostrophes read like plain ones', () => {
+    expect(analyzePrompt('the share button doesn’t work on the second device').category).toBe('debug')
+    expect(isExecution('Let’s start the plan')).toBe(true)
+    expect(follow('Do what’s next')).toBe(true)
+  })
+
+  test('store steps that reach testers or App Review are high risk', () => {
+    for (const t of [
+      'all set, submit 2.1.4 now',
+      'push build now',
+      'have we pushed the updated build yet',
+      'remove the old build and add the updated build to the version',
+      'write What to Test notes for build 52',
+      'can we ask for an expedited review?',
+      'file an app status review with Apple',
+      'please get a status update from Apple on the review',
+    ]) {
+      expect(`${t}: ${analyzePrompt(t).signals.includes('store release')}`).toBe(`${t}: true`)
+      expect(`${t}: ${route(t).tier}`).toBe(`${t}: strong`)
+    }
+    for (const t of ['push the build script changes', 'add a new build phase for the linter', 'request a status update from the agent', 'decide what to test first', 'push the branch'])
+      expect(`${t}: ${analyzePrompt(t).signals.includes('store release')}`).toBe(`${t}: false`)
+  })
+
+  test('what sits behind a paywall is payments work', () => {
+    const a = analyzePrompt('only the basic tracker stays free; move every other feature behind the paywall')
+    expect(a.risk).toBe('high')
+    expect(a.signals).toContain('payments')
   })
 })

@@ -114,7 +114,7 @@ import { agentEstimate, recordRun } from './eta'
 import { addReading } from './limits'
 import { type Meter, type Tone, type View, agentRow, agentsMeter, band, barCells, barChars, contextMeter, lifetimeLine, limitMeter, recommendations, savingsMeter, sessionSavings, taskLines, taskMeter, tierBars } from './present'
 import { CLAUDE_CODE_COMPACT_BUFFER, cacheAwareStep, compactionDone, compactionReset, compactionStep, emptyCacheAware, emptyCompaction, logSavings } from './savings'
-import { analyzePrompt, analyzeSubagent, answerDemands, assessFromTasks, decide, isExecution, isFollowUp, isPlanPrompt, raisesTask, strongerAnalysis } from './policy'
+import { analyzePrompt, analyzeSubagent, answerDemands, assessFromTasks, decide, followUpRaises, isExecution, isFollowUp, isPlanPrompt, raisesTask, strongerAnalysis } from './policy'
 import { type TtlEvidence, expectedPhaseRequests, resolveTtl, switchPays, ttlEvidence } from './economics'
 import { DEFAULT_PREFS, cacheTtlOf, describePrefsChange, nextMode, normalizePrefs, parseProjectConfig, prefsStamp, routingChanged, shortModel, stampValid, tierOfModel, tierRank } from './settings'
 import {
@@ -542,7 +542,7 @@ async function onTurnStart($: Engine, e: { text: string; turnId: string }): Prom
       const prefs = await getPrefs($)
       const current = rt.phase.analysis
       let next = current
-      if (next && e.text.trim().length > 0 && raisesTask(next, asked, prefs.mode)) next = strongerAnalysis(next, asked, prefs.mode)
+      if (next && e.text.trim().length > 0 && followUpRaises(next, e.text, asked, prefs.mode)) next = strongerAnalysis(next, asked, prefs.mode)
       // "Yes", "do it", "let's start working the plan": the work is what the
       // last answer proposed, which these words do not say. When that is high
       // risk or design work (iCloud sync, a schema deployed to production), the
@@ -1388,11 +1388,16 @@ async function maybeAutoCompact($: Engine, turnReason: string, contextTokens: nu
   const act = prefs.autoCompactSmart === 'on' ? smart : plain ? 'plain' : null
   if (!act) return
   await patchActivity($, a => ({ ...a, lastAutoCompactAt: now }))
+  // Nothing was compacted (a new turn began first, or Claude Code refused): the
+  // ten minutes between compactions do not start, so the next turn end tries again.
+  const retry = () => patchActivity($, a => (a.lastAutoCompactAt === now ? { ...a, lastAutoCompactAt: activity.lastAutoCompactAt } : a))
   const why =
     act === 'boundary' ? finishedWhy(rt.turnCommitted === true, checks === 'verified', tasksDone) : act === 'ceiling' ? `past the ${Math.round(prefs.autoCompactCeiling / 1000)}k ceiling` : midTask ? 'past the threshold, with a task still open' : 'past the threshold'
-  await scheduleCompaction($, 'auto', 1500, async r => {
-    await notify($, r.ok ? `Quality Router: auto-compacted a ${size}k-token conversation (${why}), keeping the plan and current task. ${r.text} (/quality-router autocompact off to stop)` : `Quality Router: auto-compact skipped: ${r.text}`, r.ok ? 'success' : 'warning')
+  const started = await scheduleCompaction($, 'auto', 1500, async r => {
+    if (!r.ok) await retry()
+    await notify($, r.ok ? `Quality Router: auto-compacted a ${size}k-token conversation (${why}), keeping the plan and current task. ${r.text} (/quality-router autocompact off to stop)` : `Quality Router: auto-compact skipped: ${r.text}; it tries again at the next turn end`, r.ok ? 'success' : 'warning')
   })
+  if (!started) await retry()
 }
 
 /**

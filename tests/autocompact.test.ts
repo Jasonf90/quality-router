@@ -65,6 +65,30 @@ describe('auto-compact in the session (mock integration)', () => {
     expect(await cmd($, 'status')).toContain('auto-compact at 300k tokens')
   })
 
+  test('a compaction that did not happen (a new turn began first) is tried again at the next turn end', SLOW, async ($, on) => {
+    const w = install(on)
+    w.stepUsage = big
+    w.context = { tokens: 402_000, window: 1_000_000, percent: 40 }
+    await start($)
+    await cmd($, 'on')
+    await cmd($, 'autocompact 300k')
+    w.compactRefusal = 'session.compact: a turn is running'
+    await $.turn.start({ text: 'start phase 3', turnId: 't1' })
+    await step($, { turnId: 't1' })
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+    await w.clock.advance(2000)
+    expect(w.compactions.length).toBe(0)
+    expect(w.toasts.some(t => t.includes('auto-compact skipped') && t.includes('next turn end'))).toBe(true)
+    // A minute later, well inside the ten minutes between compactions.
+    w.compactRefusal = null
+    await w.clock.advance(60_000)
+    await $.turn.start({ text: 'continue', turnId: 't2' })
+    await step($, { turnId: 't2' })
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' } as never)
+    await w.clock.advance(2000)
+    expect(w.compactions.length).toBe(1)
+  })
+
   test('never when off (the default), in DRY RUN, after an interrupted turn, or with agents still running', SLOW, async ($, on) => {
     const w = install(on)
     w.stepUsage = big

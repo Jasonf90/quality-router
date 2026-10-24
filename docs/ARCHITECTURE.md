@@ -32,7 +32,7 @@ Claude Code requires every use of `$` to stay in the hooks module itself: `claud
 | Event | What the router does |
 |---|---|
 | `session.start` | Registers `/quality-router`, loads preferences from `$.store` (undoing an older copy's overwrite, below), restores this session's ledger and limit readings, reads `<project>/.claude/quality-router.json` |
-| `turn.start` | Takes up settings changed elsewhere, after checking their stamp. A new prompt starts a **phase**: the rules analyse it and the text is kept in memory for a possible classifier call. Follow-ups such as "yes" or "go ahead" continue the current phase; one that sets the last answer's proposal going is raised to what that proposal demands. |
+| `turn.start` | Takes up settings changed elsewhere, after checking their stamp. A new prompt starts a **phase**: the rules analyse it and the text is kept in memory for a possible classifier call. Follow-ups such as "yes" or "go ahead", and questions about work under way ("tests still running?"), continue the current phase; one that sets the last answer's proposal going is raised to what that proposal demands, and a status question is never below what it would be as new work. |
 | `turn.step` | For every model request (main loop and subagents): decide once per phase (and per epoch), then rewrite `model`/`effort` on the way down when ON. Records the API-reported usage. If a routed request returns nothing at all, it is re-sent unchanged. |
 | `agent.spawn` | Picks a built-in subagent's model when it starts. Explicit models, forks, teammates, workflow agents and plugin-defined agents are left alone. |
 | `tool.call` | After the tool runs: edits move the code state, checks are recorded against it, failures feed escalation, sensitive edits and destructive commands raise risk. Results pass through untouched. |
@@ -127,13 +127,13 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 ## Known limitations
 
 - **Live API acceptance of routed models is unverified here.** The headless smoke test couldn't refresh OAuth from the sandbox. Verify with the dry-run → ON steps in [EVALUATION.md](EVALUATION.md) and check the pane's *observed* model.
-- **Phase detection is heuristic.** A short reply that points at the work in hand ("ok implement it", "still failing") continues the task; a reply that names a file or brings its own high risk starts a new one. A genuinely new short task phrased like a follow-up stays on the current task's tier (a cost, never a quality loss).
+- **Phase detection is heuristic.** A short reply that points at the work in hand ("ok implement it", "still failing", "how is the audit going?") continues the task; a reply that names a file or brings its own high risk starts a new one. A genuinely new short task phrased like a follow-up stays on the current task's tier (a cost, never a quality loss).
 - **A proposal is read from the answer's words.** Only the opening 1,500 and closing 2,500 characters are read, with the same rules as a prompt. A risk mentioned only in the middle of a long answer is not seen; one mentioned in passing at the end raises the reply that follows (a cost, never a quality loss).
 - **The settings guard undoes changes made in an older session on purpose too.** It cannot tell a deliberate press in an older copy's band from a stale save, so it restores and says so; make the change again in a current session.
 - **The cache-aware savings estimate is a model.** It holds output tokens equal across paths and approximates the conversation's growth at a model switch (another model can encode the same history in fewer tokens). On the audited sessions two independent versions of it differed by $7–13 on a $220 session; both agreed on the direction.
 - **Summary instructions are a request, not a guarantee.** The summarizer is Claude Code's; the router only adds what to keep (built from its verdict on the task, never the prompt's text). Whether a summary kept work in flight and side effects done is measured afterwards, by the weekly analysis, not checked per compaction.
 - **The compaction saving is a counterfactual.** It assumes the same requests would have followed without the compaction, and that Claude Code would have compacted at its window minus a ~33k buffer (its documented behaviour at the time of writing; with the window unknown nothing is credited). The summary's size is estimated when the host does not report it, from what every request carries plus 25k.
-- **Auto-compaction needs a turn end.** A mod cannot compact while a turn runs, so a single long agentic turn grows until it ends (or until Claude Code's own compaction). The usage record is saved every 25 requests or 10 minutes, so long turns no longer leave it only in memory.
+- **Auto-compaction needs a turn end.** A mod cannot compact while a turn runs, so a single long agentic turn grows until it ends (or until Claude Code's own compaction). When a new turn begins first (a background task reporting back), Claude Code refuses the compaction and the router tries again at the next turn end. The usage record is saved every 25 requests or 10 minutes, so long turns no longer leave it only in memory.
 - **A manual `/model` pause does not survive `/clear`** (the engine resets the mod's state). The project file and stored history are re-read after `/clear`.
 - **Escalation is enforced, but signals are heuristic.** "Credible evidence" means observed checks failing after edits; the router can't see test intent beyond what the commands and file paths say. Insufficient confidence mid-task isn't detected from the model's text.
 - **Code edits on the cheap tier are seen through edit tools and plain shell writes only.** A file written from inside a script (python, node) isn't seen, so a cheap-tier task that writes code that way isn't moved up.
@@ -153,7 +153,7 @@ An escalation changes the next request's model. Nothing is replayed or re-run.
 
 ## Test coverage
 
-`claude plugin test` runs 222 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
+`claude plugin test` runs 256 tests in 14 files (integration tests have a 30 s limit so they stay reliable on a busy machine) against the 2.1.293 engine's test kit.
 
 | Area | Unit (pure) | Mock integration (native kit) | Live |
 |---|---|---|---|

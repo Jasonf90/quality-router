@@ -188,7 +188,7 @@ Both kinds:
 - run only while routing is ON;
 - never run after an interrupted or failed turn, or while a subagent is still running;
 - wait at least 10 minutes between automatic compactions;
-- skip a turn end if you start typing first (Claude Code refuses it then), and try again at the next one;
+- skip a turn end if you start typing first, or a new turn begins (a background task reporting back), since Claude Code refuses it then, and try again at the next turn end (a compaction that did not happen does not start the ten minutes);
 - say when they happened, in a notification and in the band.
 
 **What every summary is told to keep** (the router's compactions and Claude Code's own):
@@ -254,7 +254,7 @@ The command is registered as `immediate`, so `/quality-router off` works mid-tur
 
 `tests/guarantees.test.ts` checks these rules over every combination the router's decision can see: each task category, risk, ambiguity, breadth, rules tier, confidence, mode, session effort, and the escalation, classifier-fallback and failed-check flags (437,400 decisions per rule):
 
-- High-risk work (auth, payments, privacy, migrations, security, production, sensitive data, store releases, including terse steps like *push build 7* or *…then submit*, data that syncs across devices) always runs on the strongest tier, in every mode.
+- High-risk work (auth, payments and what sits behind a paywall, privacy, migrations, security, production, sensitive data, store releases, data that syncs across devices) always runs on the strongest tier, in every mode. Store releases include terse steps like *push build now*, *…then submit*, *submit 2.1.4*, swapping the build attached to a version, the *What to Test* notes testers read, and requests to App Review (an expedited review, a status update).
 - Tasks judged to be code work (implementing, fixing, testing, refactoring, reviewing, design, diagnosis) never start on the cheap tier, in any mode. A *mechanical* edit is only one with no fix, refactor or behaviour change in it: "fix the typo" is mechanical, "bump the version and fix the crash" or "change the validation so…" is not.
 - A task that did start on the cheap tier (a look-up, summary or question) and then writes code moves up to the middle tier for the rest of the task. This applies to an edit to a source file, or a shell command that plainly writes one (`sed -i`, a redirect, `tee`). Mechanical edits (typos, renames, version bumps) stay where they are. Unlike the rules above, this one is checked by its own tests, not the exhaustive sweep.
 - In quality-first, the cheap tier gets only mechanical edits, look-ups, summaries and classification.
@@ -266,7 +266,9 @@ The command is registered as `immediate`, so `/quality-router off` works mid-tur
 
 These are checked by their own tests (`escalation.test.ts`, `policy.test.ts`):
 
-- **Follow-ups carry the task on.** "ok implement it", "the test still fails, try a different approach", "go with option 2", "what is next", "do all as recommended" and background tasks reporting back keep the task's risk, tier and escalations. A follow-up can raise the task ("…and do the same across the whole app"), never lower it. A reply that names a file, or brings its own high risk, is new work.
+- **Follow-ups carry the task on.** "ok implement it", "the test still fails, try a different approach", "go with option 2", "what next", "do all as recommended" and background tasks reporting back keep the task's risk, tier and escalations. A follow-up can raise the task ("…and do the same across the whole app"), never lower it. A reply that names a file, or brings its own high risk, is new work.
+- **A question about work under way is not a new task.** "Tests still running?", "is the archive done yet", "build 22 finished?", "how is the audit going?" and "how many are left?" ask after the task in hand, so it keeps its tier and risk. Each still gets at least what it would as new work. Until 0.12.0 each started a new task judged as a plain question (middle tier), and the work that followed rode on it. In one week's sessions that was thousands of requests. Most stayed on Opus only because switching would not have paid; in one session about 600 ran on Sonnet.
+- **Typographic apostrophes read like plain ones**, so "doesn’t work" and "What’s next" typed with smart punctuation are understood.
 - **"Yes" starts what the last answer proposed.** A reply that sets the proposed work going ("yes", "do it for me", "let's start working the plan", "continue with what you recommend") is judged by that proposal too. When Claude's last answer proposed high-risk or design work, the task runs on the strongest tier. Only the opening and the end of the answer are read, and only the verdict is kept, never the text. A reply that only asks ("what's next?") is not raised. In the sessions this came from, a plan for iCloud sync had run 772 requests on the middle tier after "let's start working the plan"; on the same transcripts this rule raises 27 replies, 24 of which ran on Opus anyway.
 - **Data that syncs across devices is high risk.** iCloud and CloudKit sync, cross-device continuity, sync conflicts and deploying a schema to production run on the strongest tier: a sync bug reaches every device a person owns, and a CloudKit production schema cannot be taken back.
 - **Risk found while working lasts.** Once a task touches a sensitive file (auth, payments, keychain…) or runs a destructive command, it stays on the strongest tier for the rest of the task, whatever is decided later. Two edits in one response are both seen.

@@ -24,14 +24,16 @@ type Rule = { re: RegExp; signal: string }
 const HIGH_RISK: Rule[] = [
   { re: /\b(auth(entication|orization|orize|n|z)?|log ?ins?|sign ?ins?|sign ?ups?|oauth\d?|openid|sso|jwt|(session|refresh|access|bearer|id) tokens?)\b/, signal: 'authentication' },
   { re: /\b(passwords?|passcodes?|keychain|keystore|secure ?enclave|encrypt(ion|ed|ing)?|decrypt\w*|cryptograph\w*|secrets?|credentials?|api[ -]?keys?|private keys?|certificate pinning|ssl pinning|cert pinning)\b/, signal: 'secrets or crypto' },
-  { re: /\b(payments?|billing|checkout|in[- ]app purchases?|iap|storekit|revenuecat|stripe|braintree|apple pay|google pay|refunds?|invoices?|subscription (purchase|billing|flow|renewal)s?)\b/, signal: 'payments' },
+  { re: /\b(payments?|billing|checkout|in[- ]app purchases?|iap|storekit|revenuecat|stripe|braintree|apple pay|google pay|refunds?|invoices?|subscription (purchase|billing|flow|renewal)s?|paywalls?)\b/, signal: 'payments' },
   { re: /\b(privacy|gdpr|ccpa|hipaa|coppa|pii|personal data|delete (the |my |a |user |their )?accounts?|account deletion|tracking consent|app tracking transparency)\b/, signal: 'privacy' },
   { re: /\b(access control|acls?|firestore rules|security rules|row[- ]level security|rls|roles? and permissions|permission checks?|authorization rules)\b/, signal: 'access control' },
   { re: /\b(migrations?|migrate (the )?(database|db|schema|data|store)|schema changes?|drop (table|column|database)|truncate|backfill|data loss|wipe|destructive|irreversible|core data model version|realm schema)\b/, signal: 'data migration' },
   { re: /\b(security|vulnerab\w*|exploits?|xss|csrf|sql injection|injection attacks?|sanitiz\w*|cve-\d+|sandbox escape)\b/, signal: 'security' },
   { re: /\b(production (database|db|data|deploy\w*|release)|prod (db|database|deploy|data)|release signing|code signing|provisioning profiles?|deploy to prod\w*)\b/, signal: 'production' },
   { re: /\b(biometric\w*|face ?id|touch ?id|healthkit|health data|medical records?|background location|location tracking)\b/, signal: 'sensitive data' },
-  { re: /\b(submit\w* (it |this |the app |the build |the update |build \d+ |\d+ )?(for|to) (app store |apple |google play |play store )?review|app store connect|testflight|(release|publish|ship|upload)\w* (it |the app |the build |the update |a build |build \d+ )?(to|on) (the )?(app store|play store|testflight|production)|phased release|then submit|build and upload( build)? \d+|upload\w* (the |a )?(new )?build|push\w* (the )?build \d+)\b/, signal: 'store release' },
+  // What reaches testers and the App Store: a submission, the build attached to
+  // a version, the notes testers read, a request to App Review.
+  { re: /\b(submit\w* (it |this |the app |the build |the update |build \d+ |\d+ )?(for|to) (app store |apple |google play |play store )?review|app store connect|testflight|(release|publish|ship|upload)\w* (it |the app |the build |the update |a build |build \d+ )?(to|on) (the )?(app store|play store|testflight|production)|phased release|then submit|build and upload( build)? \d+|upload\w* (the |a )?(new )?build|push\w* (the |a )?(new |updated |latest )?build( \d+)?(?! (scripts?|settings?|config\w*|phases?|folders?|director\w*|files?|system|numbers?|tool\w*|steps?|logs?|output|cache|errors?|times?)\b)|submit\w* (version |v)?\d+\.\d+(\.\d+)?|(add|attach|select|swap|replace)\w* (the |a )?(new|updated|latest|correct|right) build(?! (scripts?|settings?|config\w*|phases?|folders?|director\w*|files?|system|numbers?|tool\w*|steps?|logs?|output|cache|errors?|times?)\b)|what to test (notes?|field|text|section)|expedited (app )?review|(submit\w*|request\w*|file|send) (an? |the )?(app )?status review|status update from apple)\b/, signal: 'store release' },
   // A sync bug reaches every device a person owns, and a CloudKit schema
   // deployed to production cannot be taken back.
   { re: /\b(icloud (sync\w*|kit|key[- ]?value( store)?|containers?|backups?)|cloudkit|ck(record|share|container|database|syncengine|subscription)s?|nspersistentcloudkitcontainer|nsubiquitouskeyvaluestore|(cross|multi)[- ]device (sync\w*|continuity|data|state)|sync\w* (across|between|to|with) (the |all |other |your |my |their |our |every )*(devices|platforms)|(data|device|cloud|two[- ]way|bidirectional|offline) sync\w*|sync conflicts?|conflict resolution|production schema|deploy\w* (the )?(cloudkit |production )?schema|schema deploy\w*)\b/, signal: 'data sync' },
@@ -106,14 +108,36 @@ export const CLASSIFY_BELOW: Record<RouterMode, number> = {
   economy: 0.6,
 }
 
+/** Lower case, with typographic apostrophes (a phone keyboard's "don’t") made plain. */
+function plain(text: string): string {
+  return text.toLowerCase().replace(/[\u2018\u2019]/g, "'")
+}
+
 export function isContinuation(text: string): boolean {
-  const words = text.trim().toLowerCase().replace(/[.!,]+/g, ' ').split(/\s+/).filter(Boolean)
+  const words = plain(text.trim()).replace(/[.!,]+/g, ' ').split(/\s+/).filter(Boolean)
   if (words.length === 0) return true
   return words.length <= 6 && words.every(w => CONTINUATION_WORDS.has(w))
 }
 
 /** A short reply that points back at the work in hand rather than naming new work. */
-const REFERS_BACK = /^(ok(ay)?|yes|yep|yeah|sure|great|perfect|thanks|looks good|sounds good|lgtm|go ahead|please|proceed|continue|now)\b|\b(the plan|that plan|this plan|the fix|that fix|the change|those changes|these changes|the approach|that approach|the same|it still|still (fails?|failing|broken|crash\w*|doesn'?t|not|happens|wrong)|(try|do) (it |that |this )?again|instead|try (a |another |a different )|different approach|as (you|we) (said|discussed|planned|suggested|recommended|proposed)|as (recommended|suggested|planned|proposed|discussed)|implement (it|that|this|the plan|them)|do (it|that|this|them|both|all|everything)|go (ahead )?with (option|that|it|the|your|all|everything)|option \d|both of them|all of them|what('?s| is) next|next steps?|keep going|carry on|your (recommendations?|suggestions?|plan))\b/
+const REFERS_BACK = /^(ok(ay)?|yes|yep|yeah|sure|great|perfect|thanks|looks good|sounds good|lgtm|go ahead|please|proceed|continue|now)\b|\b(the plan|that plan|this plan|the fix|that fix|the change|those changes|these changes|the approach|that approach|the same|it still|still (fails?|failing|broken|crash\w*|doesn'?t|not|happens|wrong)|(try|do) (it |that |this )?again|instead|try (a |another |a different )|different approach|as (you|we) (said|discussed|planned|suggested|recommended|proposed)|as (recommended|suggested|planned|proposed|discussed)|implement (it|that|this|the plan|them)|do (it|that|this|them|both|all|everything)|go (ahead )?with (option|that|it|the|your|all|everything)|option \d|both of them|all of them|what('?s| is)? next|what (do|should|can) (i|we|you) do next|next steps?|keep going|carry on|your (recommendations?|suggestions?|plan))\b/
+
+/**
+ * A question about work already under way: "tests still running?", "is the
+ * archive done yet", "build 22 finished?", "how is the audit going?", "how
+ * many are left?". It asks after the task in hand rather than starting one.
+ * The bare forms count only as a question ("?", "is…", "…yet"), so "keep it
+ * running" or "get the release ready" stay new work.
+ */
+const STATUS_ASKED = /^(is |are )?(([\w.'-]+ ){0,2}[\w.'-]+ )?(still )?((running|building|uploading|processing|in progress)|(almost |nearly |all )?(done|finished|ready|complete|loaded|load|uploaded|processed))( yet)?$/
+const STATUS_HOW = /^(almost|nearly) (done|finished|there)\b|^how('s| is| are) (([\w.'-]+ ){0,2}[\w.'-]+ )(going|coming along|progressing)$|^how far (along )?(is|are|has|have)\b|^how (much|many) .{0,40}\b(left|remaining|to go)$|^any (updates?|progress|news)$/
+
+export function isStatusCheck(text: string): boolean {
+  const t = plain(text.trim())
+  const s = t.replace(/[?.!\s]+$/, '')
+  if (STATUS_HOW.test(s)) return true
+  return STATUS_ASKED.test(s) && (/\?\s*$/.test(t) || /^(is|are)\b/.test(s) || /\byet$/.test(s))
+}
 
 /**
  * A prompt that carries on the task in hand: a bare continuation ("yes", "go
@@ -126,12 +150,12 @@ const REFERS_BACK = /^(ok(ay)?|yes|yep|yeah|sure|great|perfect|thanks|looks good
  */
 export function isFollowUp(text: string, a: Analysis): boolean {
   if (isContinuation(text)) return true
-  const t = text.trim().toLowerCase()
+  const t = plain(text.trim())
   if (t.startsWith('<task-notification')) return true
   if (t.length > 200) return false
   if (a.risk === 'high' || a.category === 'architecture') return false
   if ((t.match(FILE_REF) ?? []).length > 0) return false
-  return REFERS_BACK.test(t)
+  return REFERS_BACK.test(t) || isStatusCheck(t)
 }
 
 /**
@@ -165,6 +189,16 @@ export function raisesTask(a: Analysis, b: Analysis, mode: RouterMode): boolean 
   return tierRank(applyMode(b, mode).tier) > tierRank(applyMode(a, mode).tier) || riskRank(b.risk) > riskRank(a.risk)
 }
 
+/**
+ * Whether a follow-up's own words ask more of the task than it has. A reply
+ * the rules cannot read ("ok thanks") raises nothing; a question about work
+ * under way ("build finished?") never runs below what it would as new work.
+ */
+export function followUpRaises(task: Analysis, text: string, asked: Analysis, mode: RouterMode): boolean {
+  if (raisesTask(task, asked, mode)) return true
+  return isStatusCheck(text) && tierRank(applyMode(asked, mode).tier) > tierRank(applyMode(task, mode).tier)
+}
+
 /** A reply that sets the proposed work going, not one that asks about it. */
 const EXECUTES = /\b(start\w*|begin|implement\w*|build|do|work(ing)?|execute|proceed|go ahead|continue|carry on|keep going|apply|finish|complete|ship|fix|set (it |them |that )?up|make (it|that|them|those|these|the changes?))\b/
 
@@ -174,7 +208,7 @@ const EXECUTES = /\b(start\w*|begin|implement\w*|build|do|work(ing)?|execute|pro
  * "do it for me". "What's next?" asks about it and is not.
  */
 export function isExecution(text: string): boolean {
-  const t = text.trim().toLowerCase()
+  const t = plain(text.trim())
   if (t.length === 0 || t.startsWith('<task-notification')) return false
   if (isContinuation(t)) return true
   return EXECUTES.test(t) && !/^(what|why|how|which|when|where|who|is|are|does|did|can|could|should)\b/.test(t)
@@ -195,7 +229,7 @@ export function answerDemands(answer: string): Analysis | null {
   if (text.trim().length === 0) return null
   const a = analyzePrompt(text)
   // Design work, not the word "plan": answers lay out plans all the time.
-  const design = hits(ARCHITECTURE, text.toLowerCase()).filter(s => s !== 'planning')
+  const design = hits(ARCHITECTURE, plain(text)).filter(s => s !== 'planning')
   if (a.risk !== 'high' && design.length === 0) return null
   return {
     ...a,
@@ -214,7 +248,7 @@ const PLAN_PROMPT =/^(please\s+)?(let'?s\s+)?(?<verb>(start|begin|do|run|execute
  * verb, "next" or a number, so "phase out the old API" is not one.
  */
 export function isPlanPrompt(text: string): boolean {
-  const t = text.trim()
+  const t = plain(text.trim())
   if (t.length === 0 || t.length > 60) return false
   const m = PLAN_PROMPT.exec(t)
   return m !== null && Boolean(m.groups?.verb || m.groups?.next || m.groups?.num)
@@ -260,7 +294,7 @@ function hits(rules: Rule[], text: string): string[] {
  * how ambiguous, and which tier the rules would give it with what confidence.
  */
 export function analyzePrompt(raw: string): Analysis {
-  const text = raw.toLowerCase().slice(0, 20_000)
+  const text = plain(raw).slice(0, 20_000)
   const signals: string[] = []
 
   let riskSignals = hits(HIGH_RISK, text)

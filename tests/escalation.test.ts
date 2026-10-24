@@ -308,6 +308,30 @@ describe('follow-ups and task lists keep the risk (mock integration)', () => {
     expect(w.sent[1]?.model).toBe('claude-opus-5-5')
   })
 
+  test('"tests still running?" asks after the task in hand: it keeps that task\'s tier', SLOW, async ($, on) => {
+    const w = install(on)
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'Make a detailed plan to audit every screen and fix what is broken', 't1')
+    expect(w.sent[0]?.model).toBe('claude-opus-5-5')
+    await turn($, 'Tests still running?', 't2')
+    expect(w.sent[1]?.model).toBe('claude-opus-5-5')
+    // Not just held there by the cost of switching: the task itself still asks for the strong tier.
+    expect(await cmd($, 'status')).not.toContain('proposed middle')
+    await turn($, 'keep going', 't3')
+    expect(w.sent[2]?.model).toBe('claude-opus-5-5')
+  })
+
+  test('a status question the rules cannot read still gets what it would as new work', SLOW, async ($, on) => {
+    const w = install(on)
+    await start($)
+    await cmd($, 'on')
+    await turn($, 'Fix the failing discount calculation in CartViewModel', 't1')
+    expect(w.sent[0]?.model).toBe('claude-sonnet-5-5')
+    await turn($, 'Build finished?', 't2')
+    expect(w.sent[1]?.model).toBe('claude-opus-5-5')
+  })
+
   test('"still fails, try again" keeps the escalation it continues', SLOW, async ($, on) => {
     const w = install(on)
     await start($)
