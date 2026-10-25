@@ -426,4 +426,4 @@ claude plugin test ./quality-router
 
 Type-check with any TypeScript 5.4+ against the declaration file Claude Code writes. Once the mod has loaded from a folder you own, that's `.claude-plugin/types/`, and you can run `tsc -p ./quality-router`.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the capability table, known limitations and test coverage, and [docs/EVALUATION.md](docs/EVALUATION.md) for a safe evaluation procedure.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the capability table, known limitations and test coverage, and [docs/EVALUATION.md](docs/EVALUATION.md) for a safe evaluation procedure. [docs/reports/](docs/reports/) has the public summaries of the weekly tune-ups, with what each change was based on.
